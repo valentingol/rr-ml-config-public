@@ -1,0 +1,23 @@
+--- !train  # Config for the training set
+data_type: "TFR"  # Only "TFR" is currently supported
+file_path: null
+max_number_of_samples: null
+parsing_config: !parsing_config {}
+shuffle: true
+tfr_structure: null
+
+--- !validation  # Config for the validation set
+data_type: "TFR"  # Only "TFR" is currently supported
+file_path: null
+max_number_of_samples: null
+parsing_config: !parsing_config {}
+shuffle: false
+tfr_structure: null
+
+--- !test  # Config for the test set
+data_type: "TFR"  # Only "TFR" is currently supported
+file_path: null
+max_number_of_samples: null
+parsing_config: !parsing_config {}
+shuffle: false
+tfr_structure: null

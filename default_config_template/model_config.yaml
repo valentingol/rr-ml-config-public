@@ -1,0 +1,3 @@
+---  # Default config's model config.
+metadata: !metadata
+    model_outputs: null

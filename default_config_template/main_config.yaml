@@ -1,0 +1,25 @@
+---  # Default config's main config file
+
+log_dir: "./log"
+
+gpu_config: !gpu_config
+    use_gpu: true
+    device_ids: [0]
+    gpu_mem_growth: true
+
+model_config: !model_config
+    path_to_config: "./config/default/model_config.yaml"
+
+data_set_config: !data_set_config
+    path_to_config: "./config/default/data_set_config.yaml"
+
+# Phases config
+train: false
+infer: false
+image_infer: false
+test: false
+phases_paths_to_configs:
+  - "./config/default/train_config.yaml"
+  - "./config/default/infer_config.yaml"
+  - "./config/default/image_infer_config.yaml"
+  - "./config/default/test_config.yaml"

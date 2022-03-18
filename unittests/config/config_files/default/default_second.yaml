@@ -1,0 +1,4 @@
+--- !subconfig2
+param3: 20.0
+subconfig3: !subconfig3
+  param4: "string"
