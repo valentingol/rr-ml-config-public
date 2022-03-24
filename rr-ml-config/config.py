@@ -195,7 +195,7 @@ class Configuration:
     @classmethod
     def load_config(
         cls,
-        config_path,
+        *config_paths,
         default_config_path=None,
         overwriting_regime="auto-save",
         verbose=True,
@@ -203,7 +203,7 @@ class Configuration:
         """
         First creates a config using the default config, then merges config_path into it. If config_path is a list,
         successively merges all configs in the list instead from index 0 to the last.
-        :param config_path: config's path or dictionary, or list of default config's paths or dictionaries to merge
+        :param config_paths: config's path or dictionary, or list of default config's paths or dictionaries to merge
         :param default_config_path: default config's path or dictionary
         :param overwriting_regime: can be "auto-save" (default, when a param is overwritten it is merged instead and the
         config is saved automatically if it had been saved previously), "locked" (params can't be overwritten except
@@ -222,11 +222,10 @@ class Configuration:
             config_path_or_dictionary=default_config_path,
             overwriting_regime=overwriting_regime,
         )
-        if isinstance(config_path, list):
-            for path in config_path:
-                config.merge(path, verbose=verbose)
-        else:
-            config.merge(config_path, verbose=verbose)
+        if config_paths and isinstance(config_paths[0], list):
+            config_paths = config_paths[0]
+        for path in config_paths:
+            config.merge(path, verbose=verbose)
         return config
 
     @classmethod
@@ -467,8 +466,7 @@ class Configuration:
         for variation_index in range(len(variations)):
             variation_configs.append(
                 self.__class__.load_config(
-                    config_path=self.config_metadata["config_hierarchy"][1:]
-                    + variations[variation_index],
+                    self.config_metadata["config_hierarchy"][1:] + variations[variation_index],
                     default_config_path=self.config_metadata["config_hierarchy"][0],
                     overwriting_regime=self.config_metadata["overwriting_regime"],
                     verbose=False,

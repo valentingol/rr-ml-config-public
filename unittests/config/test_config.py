@@ -181,6 +181,12 @@ def check_integrity(config, p1=0.1, p2=2.0, p3=30.0, p4="string"):
 
 
 def test_load_default(capsys):
+    config = ConfigForTests.load_config()
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    assert 1 != config
+    assert config != 1
+    check_integrity(config, p2=3.0, p3=20.0)
     config = ConfigForTests.load_config([])
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
