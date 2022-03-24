@@ -12,6 +12,8 @@ ensure a number of highly desirable properties such that **maintenance-less forw
 of old configs, **easy reproducibility** of any experiment, and **extreme clarity** of former 
 experiments for your future self or collaborators.
 
+[LINK TO DOCUMENTATION](https://gitlab.com/reactivereality/public/rr-ml-config-public/-/wikis/home)
+
 ## Installation
 
 The package can be installed from our registry using pip: `pip install <ADD_PACKAGE_NAME>`
