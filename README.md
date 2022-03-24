@@ -75,7 +75,7 @@ default config was used. Then, all parameters are displayed. There are of course
 in this package which you can use to organize your parameters, hierarchise your experiments etc. The
 idea being that once the bare minimum presented above is set up, scaling up is just as simple.
 
-You can learn more about all these features in our documentation.
+You can learn more about all these features in our [DOCUMENTATION](https://gitlab.com/reactivereality/public/rr-ml-config-public/-/wikis/home).
 
 ## config_history
 The Config History is a side-feature of the main Config System. It can be configured for any project
@@ -87,7 +87,7 @@ The graph can be coloured to show your most successful experiments, or grouped b
 well they have been explored in your experiment history. This makes it very useful to review your past
 work, share it with colleagues or make unexpected correlations appear.
 
-Please refer to our documentation to learn more about its setup and usage.
+Please refer to our [DOCUMENTATION](https://gitlab.com/reactivereality/public/rr-ml-config-public/-/wikis/home) to learn more about its setup and usage.
 
 Requirements (**will not** be installed automatically by pip to keep this lightweight):
 - `python>=3.7`
