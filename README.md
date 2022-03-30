@@ -16,7 +16,7 @@ experiments for your future self or collaborators.
 
 ## Installation
 
-The package can be installed from our registry using pip: `pip install <ADD_PACKAGE_NAME>`
+The package can be installed from our registry using pip: `pip install --extra-index-url=https://gitlab.com/api/v4/projects/26449469/packages/pypi/simple rr-ml-config`
 
 ## Getting started
 
