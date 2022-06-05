@@ -19,17 +19,22 @@ Copyright (C) 2022  Reactive Reality
 from setuptools import setup
 
 try:
-    # within pypi deployment docker container
+    # used for automatic deployment pipeline
     import deploytools
     version = deploytools.get_version()
 except ModuleNotFoundError:
-    # fallback for local testing
-    with open('../.rrci/version.yml', 'r') as f:
-        version = f.read().split('version: ')[1].strip()
+    # used otherwise
+    import requests
+    from packaging import version
+    print("WARNING : the version which will be displayed for this package will be the latest deployed version. "
+          "This is irrespective of which commit was used to build the library from.")
+    version = str(max([version.parse(i["version"])
+                       for i in requests.get("https://gitlab.com/api/v4/projects/26449469/packages/").json()
+                       if i["name"] == "rr-ml-config"]))
 
 setup(
     name='rr-ml-config',
-    version='1.3.0',
+    version=version,
     description='Reactive Reality Machine Learning Config System',
     url='https://gitlab.com/reactivereality/public/rr-ml-config-public',
     author='Reactive Reality AG',
