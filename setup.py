@@ -16,7 +16,9 @@ Copyright (C) 2022  Reactive Reality
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import pathlib
 from setuptools import setup
+
 
 try:
     # used for automatic deployment pipeline
@@ -32,10 +34,18 @@ except ModuleNotFoundError:
                        for i in requests.get("https://gitlab.com/api/v4/projects/26449469/packages/").json()
                        if i["name"] == "rr-ml-config"]))
 
+# The directory containing this file
+HERE = pathlib.Path(__file__).parent
+
+# The text of the README file
+SHORT_README = (HERE / "short-readme.rst").read_text()
+
 setup(
     name='rr-ml-config',
     version=version,
     description='Reactive Reality Machine Learning Config System',
+    long_description=SHORT_README,
+    long_description_content_type="text/markdown",
     url='https://gitlab.com/reactivereality/public/rr-ml-config-public',
     author='Reactive Reality AG',
     packages=['rr.ml.config'],
