@@ -3,16 +3,16 @@ Reactive Reality Machine Learning Config System - Configuration object
 Copyright (C) 2022  Reactive Reality
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
@@ -174,10 +174,10 @@ class Configuration:
             sub_config = getattr(self, sub_config_name)
             if not isinstance(sub_config, self.__class__):
                 raise TypeError(
-                    f"As the parameter {sub_config_name} is not a sub-config, it cannot be accessed.\n"
+                    f"As the parameter '{sub_config_name}' is not a sub-config, it cannot be accessed.\n"
                     f"{self._did_you_mean(sub_config_name, filter_type=self.__class__)}"
                 )
-            return sub_config[".".join(item.split(".")[1:])]
+            return sub_config[item.split(".", 1)[1]]
         else:
             return getattr(self, "___" + item if item in self._methods else item)
 
@@ -194,9 +194,19 @@ class Configuration:
             raise RuntimeError("Overwriting params in locked configs is not allowed.")
         else:
             raise ValueError(
-                f"No behaviour determined for value {self.config_metadata['overwriting_regime']} of "
+                f"No behaviour determined for value '{self.config_metadata['overwriting_regime']}' of "
                 f"parameter 'overwriting_regime'."
             )
+
+    def __getattribute__(self, item):
+        try:
+            return object.__getattribute__(self, item)
+        except AttributeError:
+            if not item.startswith("_"):
+                raise AttributeError(f"Unknown parameter of the configuration : '{item}'.\n"
+                                     f"{self._did_you_mean(item)}")
+            else:
+                raise AttributeError
 
     def __iter__(self):
         return iter(self._get_user_defined_attributes())
@@ -271,7 +281,7 @@ class Configuration:
             configs = configs[0]
         elif isinstance(configs[0], list):
             raise TypeError(
-                f"Invalid argument : {configs}\n"
+                f"Invalid argument : '{configs}'\n"
                 f"please use build_from_configs([cfg1, cfg2, ...]) or build_from_configs(cfg1, cfg2, ...)"
             )
         return cls.load_config(
@@ -424,7 +434,7 @@ class Configuration:
             for dimension in grid:
                 if dimension not in variations_names_to_use:
                     raise TypeError(
-                        f"Grid element {dimension} is an empty list or not a registered variation configuration."
+                        f"Grid element '{dimension}' is an empty list or not a registered variation configuration."
                     )
                 if dimension in variations_names_to_use_changing:
                     index = variations_names_to_use_changing.index(dimension)
@@ -501,6 +511,7 @@ class Configuration:
                     + variations[variation_index],
                     default_config_path=self.config_metadata["config_hierarchy"][0],
                     overwriting_regime=self.config_metadata["overwriting_regime"],
+                    do_not_merge_command_line=True,
                     verbose=False,
                 )
             )
@@ -688,13 +699,13 @@ class Configuration:
                     type_forcing = "bool"
                 elif ignore_unknown_types:
                     print(
-                        f"WARNING: parameter value {param} will not have its type enforced because it is not in "
+                        f"WARNING: parameter value '{param}' will not have its type enforced because it is not in "
                         f"[int, float, str, bool]."
                     )
                     type_forcing = ""
                 else:
                     raise TypeError(
-                        f"Parameter value {param} will not have its type enforced because it is not in "
+                        f"Parameter value '{param}' will not have its type enforced because it is not in "
                         f"[int, float, str, bool]. Pass ignore_unknown_types=True to avoid enforcing "
                         f"type when type is unknown."
                     )
@@ -812,7 +823,9 @@ class Configuration:
                 if from_code:
                     print(f"Merging from code : {config_path}")
                 else:
-                    print(f"Merging from new config : {config_path}")
+                    to_print = str(config_path)
+                    to_print = to_print if len(to_print) < 200 else f"{to_print[:97]} [...] {to_print[-97:]}"
+                    print(f"Merging from new config : {to_print}")
             self._init_from_config(config_path)
             self.config_metadata["config_hierarchy"].append(config_path)
             self._check_for_unlinked_sub_configs()
@@ -944,25 +957,13 @@ class Configuration:
                 "Please declare all your variations in the main config."
             )
         elif isinstance(list_to_register, dict) and (
-            sum(
-                [
-                    is_single_var(potential_single)
-                    for potential_single in list_to_register.values()
-                ]
-            )
-            == len(list_to_register)
+            all([is_single_var(potential_single) for potential_single in list_to_register.values()])
         ):
             add_to_variations(
                 list(list_to_register.values()), names=list(list_to_register.keys())
             )
         elif isinstance(list_to_register, list) and (
-            sum(
-                [
-                    is_single_var(potential_single)
-                    for potential_single in list_to_register
-                ]
-            )
-            == len(list_to_register)
+            all([is_single_var(potential_single) for potential_single in list_to_register])
         ):
             add_to_variations(list_to_register)
         elif list_to_register is not None:
@@ -1084,7 +1085,7 @@ class Configuration:
                     break
             if not found_correspondence:
                 raise RuntimeError(
-                    f"Sub-config {i.get_name()} is unlinked. Unlinked sub-configs are not allowed."
+                    f"Sub-config '{i.get_name()}' is unlinked. Unlinked sub-configs are not allowed."
                 )
 
     @staticmethod
@@ -1104,6 +1105,7 @@ class Configuration:
 
     def _did_you_mean(self, name, filter_type=None, suffix=""):
         params = {}
+        name = f"*{name}*"
         for parameter in self.get_parameter_names(deep=True):
             if filter_type is None or isinstance(self[parameter], filter_type):
                 for index in range(len(name)):
@@ -1333,7 +1335,7 @@ class Configuration:
                 )
             except AttributeError:
                 raise AttributeError(
-                    f"ERROR : parameter {key} cannot be merged : "
+                    f"ERROR : parameter '{key}' cannot be merged : "
                     f"it is not in the default '{self.get_name().upper()}' config.\n"
                     f"{self._did_you_mean(key)}"
                 )
@@ -1342,7 +1344,7 @@ class Configuration:
                 sub_config._init_from_config({new_key: value})
             else:
                 raise TypeError(
-                    f"Failed to set parameter {key} : {key.split('.')[0]} is not a sub-config.\n"
+                    f"Failed to set parameter '{key}' : '{key.split('.')[0]}' is not a sub-config.\n"
                     f"{self._did_you_mean(key.split('.')[0], filter_type=self.__class__, suffix=key.split('.', 1)[1])}"
                 )
         else:
@@ -1350,21 +1352,23 @@ class Configuration:
                 old_value = getattr(self, "___" + key if key in self._methods else key)
             except AttributeError:
                 raise AttributeError(
-                    f"ERROR : parameter {key} cannot be merged : "
+                    f"ERROR : parameter '{key}' cannot be merged : "
                     f"it is not in the default '{self.get_name().upper()}' config.\n"
                     f"{self._did_you_mean(key)}"
                 )
             if isinstance(old_value, self.__class__):
-                if not isinstance(value, self.__class__):
+                if isinstance(value, self.__class__):
+                    old_value._init_from_config(value.get_dict(deep=False))
+                elif isinstance(value, dict):
+                    old_value._init_from_config(value)
+                else:
                     raise TypeError(
-                        f"Trying to set sub-config {old_value._name}\nwith non-config element {value}.\n"
+                        f"Trying to set sub-config '{old_value._name}'\nwith non-config element '{value}'.\n"
                         f"This replacement cannot be performed."
                     )
-                else:
-                    old_value._init_from_config(value.get_dict(deep=False))
             else:
                 if verbose:
-                    print(f"Setting {key} : \nold : {old_value} \nnew : {value}")
+                    print(f"Setting '{key}' : \nold : '{old_value}' \nnew : '{value}'.")
                 object.__setattr__(
                     self,
                     "___" + key if key in self._methods else key,
@@ -1374,7 +1378,7 @@ class Configuration:
     def _add_item(self, key, value):
         if self._state[0].split(";")[0] == "setup" and "*" in key:
             raise ValueError(
-                f"The '*' character is not authorized in the default config " f"({key})"
+                f"The '*' character is not authorized in the default config ({key})."
             )
         if "." in key and "*" not in key.split(".")[0]:
             name = key.split(".")[0]
@@ -1408,7 +1412,7 @@ class Configuration:
                     sub_config._init_from_config({key.split(".", 1)[1]: value})
                 else:
                     raise TypeError(
-                        f"Failed to set parameter {key} : {key.split('.')[0]} is not a sub-config.\n"
+                        f"Failed to set parameter '{key}' : '{key.split('.')[0]}' is not a sub-config.\n"
                         f"{self._did_you_mean(key.split('.')[0], filter_type=self.__class__, suffix=key.split('.', 1)[1])}"
                     )
         else:
@@ -1504,7 +1508,8 @@ class Configuration:
                         to_merge[parameter] = [self[parameter], value, None]
                 if not in_param:
                     print(
-                        f"WARNING: parameter {pattern} does not match a param in the config. It will not be merged."
+                        f"WARNING: parameter '{pattern}', encountered while merging params from the command line, "
+                        f"does not match a param in the config. It will not be merged."
                     )
                     pass
             elif element.startswith("--"):
@@ -1520,7 +1525,7 @@ class Configuration:
                     in_param = []
                 else:
                     raise TypeError(
-                        f"Unknown type {element[1:]}, should be in [int, float, str, bool, list, dict]."
+                        f"Unknown type '{element[1:]}', should be in [int, float, str, bool, list, dict]."
                     )
             elif in_param:
                 for parameter in in_param:
@@ -1607,7 +1612,7 @@ class Configuration:
             if previous_value is None and force is None:
                 if scalar_parsed.lower() not in ["none", "null"]:
                     raise TypeError(
-                        f"Type of param {param} cannot be inferred because its previous value was None.\n"
+                        f"Type of param '{param}' cannot be inferred because its previous value was None.\n"
                         f"To overwrite None values from command line, please force their type :\n\n"
                         f"Example : \t\t python main.py --none_param=0.001 !float"
                     )
@@ -1709,7 +1714,7 @@ class Configuration:
                         }
                     else:
                         raise TypeError(
-                            f"New value for dict in '{param}' is inconsistent with old value {previous_value}. If the "
+                            f"New value for dict in '{param}' is inconsistent with old value '{previous_value}'. If the "
                             f"new value is correct, please force the type of the new elements in the dict so "
                             f"type inference can be done."
                         )
@@ -1735,7 +1740,11 @@ class Configuration:
                             f"value's dict."
                         )
 
-            if (isinstance(previous_value, int) and force is None) or force == "int":
+            if (
+                    isinstance(previous_value, int)
+                    and not isinstance(previous_value, bool)
+                    and force is None
+            ) or force == "int":
                 return int(scalar_parsed)
 
             if (
@@ -1762,6 +1771,6 @@ class Configuration:
                     try:
                         parameter = item(parameter)
                     except Exception:
-                        print(f"ERROR while pre-processing param {key} :")
+                        print(f"ERROR while pre-processing param '{key}' :")
                         raise
         return parameter

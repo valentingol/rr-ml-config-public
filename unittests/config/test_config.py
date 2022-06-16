@@ -3,16 +3,16 @@ Reactive Reality Machine Learning Config System - unit tests
 Copyright (C) 2022  Reactive Reality
 
     This program is free software: you can redistribute it and/or modify
-    it under the terms of the GNU General Public License as published by
+    it under the terms of the GNU Lesser General Public License as published by
     the Free Software Foundation, either version 3 of the License, or
     (at your option) any later version.
 
     This program is distributed in the hope that it will be useful,
     but WITHOUT ANY WARRANTY; without even the implied warranty of
     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-    GNU General Public License for more details.
+    GNU Lesser General Public License for more details.
 
-    You should have received a copy of the GNU General Public License
+    You should have received a copy of the GNU Lesser General Public License
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 import sys
@@ -364,7 +364,7 @@ def test_merge_from_command_line(capsys):
     config._merge_command_line("--lr=0.5 --param1=1 --subconfig1.param2=0.6")
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
-    assert "WARNING: parameter lr does not match a param in the config" in captured.out
+    assert "WARNING: parameter 'lr', encountered while merging params from the command line, does not match a param in the config" in captured.out
     check_integrity(config, 1, 0.6)
     config._merge_command_line("--subconfig2.subconfig3.param4='test test'")
     captured = capsys.readouterr()
@@ -385,6 +385,20 @@ def test_merge_from_command_line(capsys):
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config, 2, None, "none", p4=[1, 0.5, {"string": "'[as"}])
+    config._merge_command_line("--subconfig1.param2")
+    assert config.subconfig1.param2 is True
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    config._merge_command_line("--subconfig1.param2=False")
+    assert config.subconfig1.param2 is False
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    config._merge_command_line("--subconfig1.param2=3")
+    assert config.subconfig1.param2 is True
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    with pytest.raises(Exception, match="could not convert string to float: 'False'"):
+        config._merge_command_line("--param1=False")
 
 
 def test_method_name(capsys):
