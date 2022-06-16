@@ -38,7 +38,7 @@ except ModuleNotFoundError:
 HERE = pathlib.Path(__file__).parent
 
 # The text of the README file
-SHORT_README = (HERE / "short-readme.rst").read_text()
+SHORT_README = (HERE / "short-readme.md").read_text()
 
 setup(
     name='rr-ml-config',
