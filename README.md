@@ -1,6 +1,15 @@
 # rr-ml-config
 
+[![Offial repo](https://img.shields.io/badge/official%20repo-rr--ml--config--public-%23ff9626?logo=gitlab)](https://gitlab.com/reactivereality/public/rr-ml-config-public)
+![GitHub last commit (branch)](https://img.shields.io/github/last-commit/valentingol/rr-ml-config-public/master)
+[![License](https://img.shields.io/badge/license-LGPLV3%2B-%23c4c2c2)](https://www.gnu.org/licenses/)
+
 ---
+
+**DISCLAIMER: This repository is the public version of a repository that is the property of [Reactive Reality](https://www.reactivereality.com/). This repository IS NOT OFFICIAL and can not to be maintained in the future. Some minor changed * are applied from the [official repository (GitLab)](https://gitlab.com/reactivereality/public/rr-ml-config-public) (under lesser GNU license).**
+
+*documentation and other PyPI related changes
+
 This package is a Config System which allows easy manipulation of config files for safe, clear and
 repeatable experiments. In a few words, it is:
 
