@@ -393,7 +393,7 @@ def test_merge_from_command_line(capsys):
     assert config.subconfig1.param2 is False
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
-    config._merge_command_line("--subconfig1.param2=3")
+    config._merge_command_line("--subconfig1.param2=1")
     assert config.subconfig1.param2 is True
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out

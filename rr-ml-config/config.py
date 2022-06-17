@@ -1753,7 +1753,14 @@ class Configuration:
                 return float(scalar_parsed)
 
             if (isinstance(previous_value, bool) and force is None) or force == "bool":
-                return scalar_parsed.strip(" ").lower() not in ["n", "no", "false"]
+                if scalar_parsed.strip(" ").lower() in ["y", "yes", "true", "1"]:
+                    return True
+                elif scalar_parsed.strip(" ").lower() in ["n", "no", "false", "0"]:
+                    return False
+                else:
+                    raise ValueError("Boolean parameters can only be replaced with (non case sensitive) : \n"
+                                     "- to get a True value : y, yes, true, 1\n"
+                                     "- to get a False value : n, no, false, 0")
 
         to_merge = {k: _adapt_to_type(v[0], v[1], v[2], k) for k, v in to_merge.items()}
 
