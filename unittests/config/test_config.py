@@ -16,194 +16,45 @@ Copyright (C) 2022  Reactive Reality
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 import sys
+import os
+import pytest
+from typing import Any
+
+from pathlib import Path
+from fixtures import tmp_file_name, yaml_default, yaml_experiment, yaml_default_unlinked, load_config, \
+    yaml_default_preproc_default_dot_param, yaml_default_sub_variations, yaml_default_set_twice, \
+    yaml_experiment_sub_star, yaml_experiment_sub_dot, yaml_craziest_config, template, \
+    yaml_no_file_call_processing_while_loading, yaml_no_file_call_processing_while_loading_nested
+
 IS_REMOTE = "--junitxml" in sys.argv
 
 if IS_REMOTE:
     from rr.ml.config import Configuration
+    from rr.ml.config.user_utils import make_config
+    from rr.ml.config.config_utils import compare_string_pattern
 else:
-    from config import Configuration
-import os
-import pytest
-from pathlib import Path
+    import importlib
+    config_module = importlib.import_module("rr-ml-config")
+    Configuration = config_module.config.Configuration
+    make_config = config_module.user_utils.make_config
+    compare_string_pattern = config_module.config_utils.compare_string_pattern
 
 
-@pytest.fixture
-def tmp_file_name(tmpdir):
-    filename = tmpdir / 'tmp.yaml'
-    yield filename
-
-
-# @pytest.fixture
-# def yaml_default(tmpdir):
-#     index = len(os.listdir(tmpdir))
-#     content = f"param1: 0.1\n--- !subconfig1\nparam2: 3.0\n---\n" \
-#               f"def_second_path: '{tmpdir / f'default_second{index}.yaml'}'\nexp_second_path: null"
-#     with open(tmpdir / f'default{index}.yaml', "w") as s:
-#         s.write(content)
-#     content = f"--- !subconfig2\nparam3: 20.0\nsubconfig3: !subconfig3\n  param4: 'string'"
-#     with open(tmpdir / f'default_second{index}.yaml', "w") as s:
-#         s.write(content)
-#     yield str(tmpdir / f'default{index}.yaml'), str(tmpdir / f'default_second{index}.yaml')
-
-
-@pytest.fixture
-def yaml_default_unlinked(tmpdir):
-    content = "param1:\n  param2: 1\n  param3: !param3\n    param4: 2"
-    with open(tmpdir / f'tmp{len(os.listdir(tmpdir))}.yaml', "w") as s:
-        s.write(content)
-    yield str(tmpdir / f'tmp{len(os.listdir(tmpdir))-1}.yaml')
-
-
-@pytest.fixture
-def yaml_default_preproc_default_dot_param(tmpdir):
-    content = "param1.param2: 2"
-    with open(tmpdir / f'tmp{len(os.listdir(tmpdir))}.yaml', "w") as s:
-        s.write(content)
-    yield str(tmpdir / f'tmp{len(os.listdir(tmpdir))-1}.yaml')
-
-
-@pytest.fixture
-def yaml_default_sub_variations(tmpdir):
-    content = "param1: !param1\n  var: []"
-    with open(tmpdir / f'tmp{len(os.listdir(tmpdir))}.yaml', "w") as s:
-        s.write(content)
-    yield str(tmpdir / f'tmp{len(os.listdir(tmpdir))-1}.yaml')
-
-
-@pytest.fixture
-def yaml_default_set_twice(tmpdir):
-    content = "param: 2"
-    with open(tmpdir / f'tmp{len(os.listdir(tmpdir))}.yaml', "w") as s:
-        s.write(content)
-    yield str(tmpdir / f'tmp{len(os.listdir(tmpdir))-1}.yaml')
-
-
-@pytest.fixture
-def yaml_experiment_sub_star(tmpdir):
-    content = "subconfig2: !subconfig2\n  '*param*': 1.0"
-    with open(tmpdir / f'tmp{len(os.listdir(tmpdir))}.yaml', "w") as s:
-        s.write(content)
-    yield str(tmpdir / f'tmp{len(os.listdir(tmpdir))-1}.yaml')
-
-
-@pytest.fixture
-def yaml_experiment_sub_dot(tmpdir):
-    content = "subconfig2: !subconfig2\n  subconfig3.param4: 1.0"
-    with open(tmpdir / f'tmp{len(os.listdir(tmpdir))}.yaml', "w") as s:
-        s.write(content)
-    yield str(tmpdir / f'tmp{len(os.listdir(tmpdir))-1}.yaml')
-
-
-@pytest.fixture
-def yaml_craziest_config(tmpdir):
-    with open(tmpdir / 'd_first.yaml', "w") as s:
-        s.write(f"p1: 1\n"
-                f"--- !c1\n"
-                f"c2: !c2\n"
-                f"  f_path: {'d_second.yaml'}\n"
-                f"---\n"
-                f"c4.p3: 3\n"
-                f"c4.p7: 7\n"
-                f"f_path: {tmpdir / 'd_second.yaml'}")
-    with open(tmpdir / 'd_second.yaml', "w") as s:
-        s.write(f"--- !c3\n"
-                f"p2: 2\n"
-                f"c5.s_path: {tmpdir / 'd_third.yaml'}\n"
-                f"---\n"
-                f"p6: 6")
-    with open(tmpdir / 'd_third.yaml', "w") as s:
-        s.write("--- !c6\n"
-                "p4: 4\n"
-                "---\n"
-                "p5: 5")
-
-    with open(tmpdir / 'e_first.yaml', "w") as s:
-        s.write(f"'*p6': 7\n"
-                f"--- !c1\n"
-                f"c2.f_path: {tmpdir / 'e_second.yaml'}\n"
-                f"---\n"
-                f"c4: !c4\n"
-                f"  p3: 'test'\n"
-                f"c4.p7: 'test2'")
-    with open(tmpdir / 'e_second.yaml', "w") as s:
-        s.write(f"--- !c3\n"
-                f"'*.p*': 8")
-    yield str(tmpdir / 'd_first.yaml'), str(tmpdir / 'e_first.yaml')
-
-
-@pytest.fixture
-def yaml_no_file_call_processing_while_loading(tmpdir):
-    with open(tmpdir / 'd_first.yaml', "w") as s:
-        s.write(f"test_path: {tmpdir / 'd_second.yaml'}\nexp_path: null")
-    with open(tmpdir / 'd_second.yaml', "w") as s:
-        s.write("param: 0.1")
-    with open(tmpdir / 'e_first.yaml', "w") as s:
-        s.write(f"exp_path: {tmpdir / 'e_second.yaml'}")
-    with open(tmpdir / 'e_second.yaml', "w") as s:
-        s.write("param: 0.2")
-    config = ConfigForTests.build_from_configs(str(tmpdir / 'd_first.yaml'), str(tmpdir / 'e_first.yaml'),
-                                               do_not_merge_command_line=True)
-    config.save(str(tmpdir / 'save.yaml'))
-    with open(tmpdir / 'd_second.yaml', "w") as s:
-        s.write("param: 0.3")
-    with open(tmpdir / 'e_second.yaml', "w") as s:
-        s.write("param: 0.4")
-    config2 = ConfigForTests.build_from_configs(str(tmpdir / 'd_first.yaml'), str(tmpdir / 'save.yaml'),
-                                                do_not_merge_command_line=True)
-    yield config, config2
-
-
-@pytest.fixture
-def yaml_no_file_call_processing_while_loading_nested(tmpdir):
-    with open(tmpdir / 'nd_first.yaml', "w") as s:
-        s.write(f"c: !c\n  test_path: {tmpdir / 'nd_second.yaml'}\n  exp_path: null")
-    with open(tmpdir / 'nd_second.yaml', "w") as s:
-        s.write("param: 0.1")
-    with open(tmpdir / 'ne_first.yaml', "w") as s:
-        s.write(f"c: !c\n  exp_path: {tmpdir / 'ne_second.yaml'}")
-    with open(tmpdir / 'ne_second.yaml', "w") as s:
-        s.write("param: 0.2")
-    config = ConfigForTests.build_from_configs(str(tmpdir / 'nd_first.yaml'), str(tmpdir / 'ne_first.yaml'),
-                                               do_not_merge_command_line=True)
-    config.save(str(tmpdir / 'nsave.yaml'))
-    with open(tmpdir / 'nd_second.yaml', "w") as s:
-        s.write("param: 0.3")
-    with open(tmpdir / 'ne_second.yaml', "w") as s:
-        s.write("param: 0.4")
-    config2 = ConfigForTests.build_from_configs(str(tmpdir / 'nd_first.yaml'), str(tmpdir / 'nsave.yaml'),
-                                                do_not_merge_command_line=True)
-    yield config, config2
-
-
-class ConfigForTests(Configuration):
-    def __init__(self, **kwargs):
-        super().__init__(**kwargs)
-
-    @staticmethod
-    def get_default_config_path():
-        return "unittests/config/config_files/default/default.yaml"
-
-    def parameters_pre_processing(self):
-        return {"*_path": self.register_as_additional_config_file,
-                "*var*": self.register_as_config_variations,
-                "grid": self.register_as_grid}
-
-
-def check_integrity(config, p1=0.1, p2=2.0, p3=30.0, p4="string"):
+def check_integrity(config, p1: Any = 0.1, p2: Any = 2.0, p3: Any = 30.0, p4: Any = "string"):
     assert config["param1"] == p1
     assert config["subconfig1.param2"] == p2
     assert config["subconfig2.param3"] == p3
     assert config["subconfig2.subconfig3.param4"] == p4
 
 
-def test_load_default(capsys):
-    config = ConfigForTests.load_config(do_not_merge_command_line=True)
+def test_load_default(capsys, yaml_default):
+    config = load_config(default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     assert 1 != config
     assert config != 1
     check_integrity(config, p2=3.0, p3=20.0)
-    config = ConfigForTests.load_config([], do_not_merge_command_line=True)
+    config = template(default_config=yaml_default).load_config([], do_not_merge_command_line=True)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     assert 1 != config
@@ -221,30 +72,27 @@ def test_load_default(capsys):
     object.__delattr__(config2.subconfig2, "subconfig3")
     assert config != config2
     assert config2 != config
-    assert config == ConfigForTests.build_from_configs(ConfigForTests.get_default_config_path(),
-                                                       do_not_merge_command_line=True)
+    assert config == template(default_config=yaml_default).build_from_configs(
+        template(default_config=yaml_default).get_default_config_path(), do_not_merge_command_line=True)
 
 
-def test_load_experiment(capsys, yaml_experiment_sub_dot, yaml_experiment_sub_star):
-    config = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                        do_not_merge_command_line=True)
+def test_load_experiment(capsys, yaml_default, yaml_experiment, yaml_experiment_sub_dot, yaml_experiment_sub_star):
+    config = load_config(yaml_experiment, default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config)
-    assert config == ConfigForTests.build_from_configs([ConfigForTests.get_default_config_path(),
-                                                        "unittests/config/config_files/experiment/experiment.yaml"],
-                                                       do_not_merge_command_line=True)
-    config = ConfigForTests.load_config(yaml_experiment_sub_dot,
-                                        do_not_merge_command_line=True)
+    assert config == template(default_config=yaml_default).build_from_configs(
+        [template(default_config=yaml_default).get_default_config_path(),
+         yaml_experiment],
+        do_not_merge_command_line=True)
+    config = load_config(yaml_experiment_sub_dot, default_config=yaml_default)
     check_integrity(config, p2=3.0, p3=20.0, p4=1.0)
-    config = ConfigForTests.load_config(yaml_experiment_sub_star,
-                                        do_not_merge_command_line=True)
+    config = load_config(yaml_experiment_sub_star, default_config=yaml_default)
     check_integrity(config, p2=3.0, p3=1.0, p4=1.0)
 
 
 def test_get(capsys):
-    config = ConfigForTests.build_from_configs({"save": "test", "param": 1},
-                                               do_not_merge_command_line=True)
+    config = make_config({"save": "test", "param": 1}, do_not_merge_command_line=True)
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
     assert config["param"] == 1
@@ -260,10 +108,11 @@ def test_get(capsys):
     assert config.get("param.param", None) is None
 
 
-def test_get_dict(capsys):
-    config = ConfigForTests.load_config([], do_not_merge_command_line=True)
+def test_get_dict(capsys, yaml_default):
+    config = load_config(default_config=yaml_default)
     object.__setattr__(config, "___save", "test")
-    def_second = os.path.abspath("unittests/config/config_files/default/default_second.yaml")
+    def_second = os.path.join( os.path.sep.join(yaml_default.split(os.path.sep)[:-1]),
+                              f'default_second{yaml_default.split(os.path.sep)[-1][len("default"):-len(".yaml")]}.yaml')
     assert config.get_dict() == {'param1': 0.1,
                                  'subconfig1': {'param2': 3.0},
                                  'subconfig2': {'param3': 20.0, 'subconfig3': {'param4': 'string'}},
@@ -274,12 +123,12 @@ def test_get_dict(capsys):
     assert config['def_second_path'] == def_second
     assert config['exp_second_path'] is None
     assert config['save'] == 'test'
-    assert isinstance(config['subconfig1'], ConfigForTests)
-    assert isinstance(config['subconfig2'], ConfigForTests)
+    assert isinstance(config['subconfig1'], Configuration)
+    assert isinstance(config['subconfig2'], Configuration)
 
 
-def test_iter(capsys):
-    config = ConfigForTests.load_config([], do_not_merge_command_line=True)
+def test_iter(capsys, yaml_default):
+    config = load_config(default_config=yaml_default)
     object.__setattr__(config, "___save", "test")
     dict_for_test = {'param1': 0, 'subconfig1': 0, 'subconfig2': 0,
                      'def_second_path': 0, 'exp_second_path': 0, 'save': 0}
@@ -289,17 +138,18 @@ def test_iter(capsys):
     assert len(dict_for_test) == 6
 
 
-def test_keys_values_items(capsys):
-    config = ConfigForTests.load_config([], do_not_merge_command_line=True)
+def test_keys_values_items(capsys, yaml_default):
+    config = load_config(default_config=yaml_default)
     object.__setattr__(config, "___save", "test")
-    def_second = os.path.abspath("unittests/config/config_files/default/default_second.yaml")
+    def_second = os.path.join(os.path.sep.join(yaml_default.split(os.path.sep)[:-1]),
+                              f'default_second{yaml_default.split(os.path.sep)[-1][len("default"):-len(".yaml")]}.yaml')
     # deep = False (default)
     expected_dict = {'param1': 0.1,
-                    'subconfig1': config.subconfig1,
-                    'subconfig2': config.subconfig2,
-                    'def_second_path': def_second,
-                    'exp_second_path': None,
-                    'save': 'test'}
+                     'subconfig1': config.subconfig1,
+                     'subconfig2': config.subconfig2,
+                     'def_second_path': def_second,
+                     'exp_second_path': None,
+                     'save': 'test'}
     assert config.items() == expected_dict.items()
     assert config.keys() == expected_dict.keys()
     assert list(config.values()) == list(expected_dict.values())
@@ -314,27 +164,8 @@ def test_keys_values_items(capsys):
     assert list(config.values(deep=True)) == list(expected_dict_deep.values())
 
 
-def test_get_dict(capsys):
-    config = ConfigForTests.load_config([], do_not_merge_command_line=True)
-    object.__setattr__(config, "___save", "test")
-    def_second = os.path.abspath("unittests/config/config_files/default/default_second.yaml")
-    assert config.get_dict() == {'param1': 0.1,
-                                 'subconfig1': {'param2': 3.0},
-                                 'subconfig2': {'param3': 20.0, 'subconfig3': {'param4': 'string'}},
-                                 'def_second_path': def_second,
-                                 'exp_second_path': None,
-                                 'save': 'test'}
-    assert config['param1'] == 0.1
-    assert config['def_second_path'] == def_second
-    assert config['exp_second_path'] is None
-    assert config['save'] == 'test'
-    assert isinstance(config['subconfig1'], ConfigForTests)
-    assert isinstance(config['subconfig2'], ConfigForTests)
-
-
-def test_merge_pattern(capsys):
-    config = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                        do_not_merge_command_line=True)
+def test_merge_pattern(capsys, yaml_default, yaml_experiment):
+    config = load_config(yaml_experiment, default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     config.merge({"param*": 0.2})
@@ -343,67 +174,70 @@ def test_merge_pattern(capsys):
     check_integrity(config, 0.2, 0.2, 0.2, 0.2)
     config.subconfig2.merge({"*param*": 0.4})
     check_integrity(config, 0.2, 0.2, 0.4, 0.4)
-    assert config.config_metadata["config_hierarchy"] == ['unittests/config/config_files/default/default.yaml',
-                                                          'unittests/config/config_files/experiment/experiment.yaml',
+    assert config.config_metadata["config_hierarchy"] == [yaml_default,
+                                                          yaml_experiment,
                                                           {'param*': 0.2}, {'*param*': 0.2},
                                                           {'subconfig2.*param*': 0.4}]
     config.subconfig2.subconfig3.merge({"*param*": "0.5"})
     check_integrity(config, 0.2, 0.2, 0.4, "0.5")
-    assert config.config_metadata["config_hierarchy"] == ['unittests/config/config_files/default/default.yaml',
-                                                          'unittests/config/config_files/experiment/experiment.yaml',
+    assert config.config_metadata["config_hierarchy"] == [yaml_default,
+                                                          yaml_experiment,
                                                           {'param*': 0.2}, {'*param*': 0.2},
                                                           {'subconfig2.*param*': 0.4},
                                                           {'subconfig2.subconfig3.*param*': "0.5"}]
 
 
-def test_merge_from_command_line(capsys):
-    config = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                        do_not_merge_command_line=True)
+def test_merge_from_command_line(capsys, yaml_default, yaml_experiment):
+    def mcl(cfg, string):
+        to_merge = cfg._get_command_line_dict(string_to_merge=string)
+        if to_merge:
+            print(f"Merging from command line : {to_merge}")
+            cfg._merge(to_merge)
+    config = load_config(yaml_experiment, default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
-    config._merge_command_line("--lr=0.5 --param1=1 --subconfig1.param2=0.6")
+    mcl(config, "--lr=0.5 --param1=1 --subconfig1.param2=0.6")
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
-    assert "WARNING: parameter 'lr', encountered while merging params from the command line, does not match a param in the config" in captured.out
+    assert "WARNING: parameter 'lr', encountered while merging params from the command line, does not match a param" \
+           " in the config" in captured.out
     check_integrity(config, 1, 0.6)
-    config._merge_command_line("--subconfig2.subconfig3.param4='test test'")
+    mcl(config, "--subconfig2.subconfig3.param4='test test'")
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config, 1, 0.6, p4="test test")
-    config_2 = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                          do_not_merge_command_line=True)
-    config_2._merge_command_line(config.get_command_line_argument(do_return_string=True))
+    config_2 = load_config(yaml_experiment, default_config=yaml_default)
+    mcl(config_2, config.get_command_line_argument(do_return_string=True))
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config_2, 1, 0.6, p4="test test")
-    config_2._merge_command_line("--param1 2 --*param2=none --*param3=none !str "
-                                 "--*param4= '[ 1!int  ,0.5 !float, {string:\\'[as !str}!dict]' !list")
+    mcl(config_2, "--param1 2 --*param2=none --*param3=none !str "
+                  "--*param4= '[ 1!int  ,0.5 !float, {string:\\'[as !str}!dict]' !list")
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config_2, 2, None, "none", p4=[1, 0.5, {"string": "'[as"}])
-    config._merge_command_line(config_2.get_command_line_argument(do_return_string=True))
+    mcl(config, config_2.get_command_line_argument(do_return_string=True))
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config, 2, None, "none", p4=[1, 0.5, {"string": "'[as"}])
-    config._merge_command_line("--subconfig1.param2")
+    mcl(config, "--subconfig1.param2")
     assert config.subconfig1.param2 is True
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
-    config._merge_command_line("--subconfig1.param2=False")
+    mcl(config, "--subconfig1.param2=False")
     assert config.subconfig1.param2 is False
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
-    config._merge_command_line("--subconfig1.param2=1")
+    mcl(config, "--subconfig1.param2=1")
     assert config.subconfig1.param2 is True
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     with pytest.raises(Exception, match="could not convert string to float: 'False'"):
-        config._merge_command_line("--param1=False")
+        mcl(config, "--param1=False")
 
 
 def test_method_name(capsys):
-    config = ConfigForTests.build_from_configs({"save": "test"},
-                                               do_not_merge_command_line=True)
+    config = make_config({"save": "test"}, do_not_merge_command_line=True)
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
     assert config.details() == "\nMAIN CONFIG :\nConfiguration hierarchy :\n> {'save': 'test'}\n\n - save : test\n"
@@ -414,31 +248,30 @@ def test_method_name(capsys):
                                " - save : 0.1\n"
 
 
-def test_details(capsys):
-    config = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                        do_not_merge_command_line=True)
-    s = "\nMAIN CONFIG :\nConfiguration hierarchy :\n> unittests/config/config_files/default/default.yaml\n" \
-        "> unittests/config/config_files/experiment/experiment.yaml\n\n - param1 : 0.1\n - subconfig1 : \n	" \
+def test_details(capsys, yaml_default, yaml_experiment):
+    config = load_config(yaml_experiment, default_config=yaml_default)
+    s = f"\nMAIN CONFIG :\nConfiguration hierarchy :\n> {yaml_default}\n" \
+        f"> {yaml_experiment}\n\n - param1 : 0.1\n - subconfig1 : \n	" \
         "SUBCONFIG1 CONFIG :\n	 - param2 : 2.0\n\n - subconfig2 : \n	SUBCONFIG2 CONFIG :\n	 - param3 : 30.0\n" \
         "	 - subconfig3 : \n		SUBCONFIG3 CONFIG :\n		 - param4 : string\n\n\n"
     assert s == config.details(no_show="*_path")
-    s = "\nMAIN CONFIG :\nConfiguration hierarchy :\n> unittests/config/config_files/default/default.yaml\n" \
-        "> unittests/config/config_files/experiment/experiment.yaml\n\n - param1 : 0.1\n - subconfig1 : SUBCONFIG1\n" \
+    s = f"\nMAIN CONFIG :\nConfiguration hierarchy :\n> {yaml_default}\n" \
+        f"> {yaml_experiment}\n\n - param1 : 0.1\n - subconfig1 : SUBCONFIG1\n" \
         " - subconfig2 : \n	SUBCONFIG2 CONFIG :\n	 - param3 : 30.0\n	 - subconfig3 : \n		SUBCONFIG3 CONFIG :\n" \
         "		 - param4 : string\n\n\n"
     assert s == config.details(expand_only=["subconfig2"], no_show="*_path")
-    s = "\nMAIN CONFIG :\nConfiguration hierarchy :\n> unittests/config/config_files/default/default.yaml\n" \
-        "> unittests/config/config_files/experiment/experiment.yaml\n\n - param1 : 0.1\n - subconfig1 : \n" \
+    s = f"\nMAIN CONFIG :\nConfiguration hierarchy :\n> {yaml_default}\n" \
+        f"> {yaml_experiment}\n\n - param1 : 0.1\n - subconfig1 : \n" \
         "	SUBCONFIG1 CONFIG :\n	 - param2 : 2.0\n\n - subconfig2 : SUBCONFIG2\n"
     assert s == config.details(no_expand=["subconfig2"], no_show="*_path")
 
 
 def test_variations(capsys):
-    config = ConfigForTests.build_from_configs({"p1": 0.1, "p2": 1.0,
-                                                "var1": [{"p1": 0.1}, {"p1": 0.2}],
-                                                "var2": [{"p2": 1.0}, {"p2": 2.0}, {"p2": 3.0}],
-                                                "grid": None},
-                                               do_not_merge_command_line=True)
+    config = make_config({"p1": 0.1, "p2": 1.0, "var1": [{"p1": 0.1}, {"p1": 0.2}],
+                          "var2": [{"p2": 1.0}, {"p2": 2.0}, {"p2": 3.0}],
+                          "grid": None},
+                         config_class=template(yaml_default),
+                         do_not_merge_command_line=True)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     assert config.p1 == 0.1 and config.p2 == 1.0
@@ -456,62 +289,114 @@ def test_variations(capsys):
     assert variations[1].p2 == variations[4].p2 == 2.0 and variations[2].p2 == variations[5].p2 == 3.0
 
 
-def test_pre_processing(capsys, tmp_file_name, yaml_no_file_call_processing_while_loading,
-                        yaml_no_file_call_processing_while_loading_nested, yaml_default_preproc_default_dot_param):
-    ConfigForTests.parameters_pre_processing = lambda self: {"*_path": self.register_as_additional_config_file,
-                                                             "*param*": lambda x: x+1 if not isinstance(x, str) else x}
-    config = ConfigForTests.load_config(default_config_path=yaml_default_preproc_default_dot_param,
-                                        do_not_merge_command_line=True)
+def test_pre_processing(capsys, tmp_file_name, yaml_no_file_call_processing_while_loading, yaml_default,
+                        yaml_no_file_call_processing_while_loading_nested, yaml_default_preproc_default_dot_param,
+                        yaml_experiment):
+    preprocessing = {"*param*": lambda x: x+1 if not isinstance(x, str) else x}
+    config = load_config(default_config=yaml_default_preproc_default_dot_param, preprocessing=preprocessing)
     assert config.param1.param2 == 3
-    config = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                        do_not_merge_command_line=True)
+    config = load_config(yaml_experiment, default_config=yaml_default,
+                         preprocessing=preprocessing)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     check_integrity(config, 1.1, 3.0, 31.0)
     config.save(str(tmp_file_name))
-    config2 = ConfigForTests.load_config(str(tmp_file_name),
-                                         do_not_merge_command_line=True)
+    config2 = load_config(str(tmp_file_name), default_config=yaml_default, preprocessing=preprocessing)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     assert config == config2
     config2.merge({"param1": 0.2})
     assert config2.param1 == 1.2
-    ConfigForTests.parameters_pre_processing = lambda self: {"*_path": self.register_as_additional_config_file,
-                                                             "*var*": self.register_as_config_variations,
-                                                             "grid": self.register_as_grid}
     assert yaml_no_file_call_processing_while_loading[0] == yaml_no_file_call_processing_while_loading[1]
     assert yaml_no_file_call_processing_while_loading_nested[0] == yaml_no_file_call_processing_while_loading_nested[1]
 
 
-def test_save_reload(capsys, tmp_file_name):
-    config = ConfigForTests.load_config("unittests/config/config_files/experiment/experiment.yaml",
-                                        do_not_merge_command_line=True)
+def test_post_processing(capsys, yaml_default, yaml_experiment, tmp_file_name,
+                         yaml_default_preproc_default_dot_param):
+    # Does post-processing work after load_config ?
+    postprocessing = {"*param*": lambda x: x + 1 if not isinstance(x, str) else x}
+    config = load_config(default_config=yaml_default_preproc_default_dot_param, postprocessing=postprocessing)
+    assert config.param1.param2 == 3
+    config = load_config(yaml_experiment, default_config=yaml_default,
+                         postprocessing=postprocessing)
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    check_integrity(config, 1.1, 3.0, 31.0)
+    config.save(str(tmp_file_name))
+    config2 = load_config(str(tmp_file_name), default_config=yaml_default, postprocessing=postprocessing)
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    assert config == config2
+    config2 = load_config(str(tmp_file_name), default_config=yaml_default)
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    check_integrity(config2)
+    # Does post-processing work after manual merge ?
+    config = load_config(default_config=yaml_default_preproc_default_dot_param, postprocessing=postprocessing)
+    config.merge(yaml_default_preproc_default_dot_param)
+    assert config.param1.param2 == 3
+    config = load_config({}, default_config=yaml_default,
+                         postprocessing=postprocessing)
+    config.merge(yaml_experiment)
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    check_integrity(config, 1.1, 3.0, 31.0)
+    config.save(str(tmp_file_name))
+    config2 = load_config({}, default_config=yaml_default, postprocessing=postprocessing)
+    config2.merge(str(tmp_file_name))
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    assert config == config2
+    config2 = load_config({}, default_config=yaml_default)
+    config2.merge(str(tmp_file_name))
+    captured = capsys.readouterr()
+    assert "WARNING" not in captured.out
+    check_integrity(config2)
+    # Does post-processing interact correctly with save ?
+
+    class Storage:
+        def __init__(self, **kwargs):
+            self.stored = kwargs
+    postprocessing = {"*_to_store": lambda x: Storage(**x)}
+    config = make_config({"a": 10, "b.to_store": {"i": 1, "j": 2}}, post_processing_dict=postprocessing)
+    config.save(str(tmp_file_name))
+    assert config == make_config(str(tmp_file_name), post_processing_dict=postprocessing)
+    assert make_config(str(tmp_file_name)).b.to_store == {"i": 1, "j": 2}
+    assert make_config(str(tmp_file_name)).a == 10
+    # Does post-processing interact correctly with get_command_line_arguments ?
+    config = make_config({"a": 10, "b.to_store": {"i": 1, "j": 2}}, post_processing_dict=postprocessing)
+    dico = config._get_command_line_dict(config.get_command_line_argument(do_return_string=True))
+    assert config == make_config(dico, post_processing_dict=postprocessing)
+    assert make_config(dico).b.to_store == {"i": 1, "j": 2}
+    assert make_config(dico).a == 10
+
+
+def test_save_reload(capsys, tmp_file_name, yaml_default, yaml_experiment):
+    config = load_config(yaml_experiment, default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     config.save(str(tmp_file_name))
-    config2 = ConfigForTests.load_config(str(tmp_file_name),
-                                         do_not_merge_command_line=True)
+    config2 = load_config(str(tmp_file_name), default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     config2.save(str(tmp_file_name))
-    config3 = ConfigForTests.load_config(str(tmp_file_name),
-                                         do_not_merge_command_line=True)
+    config3 = load_config(str(tmp_file_name), default_config=yaml_default)
     captured = capsys.readouterr()
     assert "WARNING" not in captured.out
     assert config == config2 == config3
 
 
 def test_save_reload_method_param(capsys, tmp_file_name):
-    config = ConfigForTests(config_path_or_dictionary={"save": 1})
+    config = make_config({"save": 1}, do_not_merge_command_line=True)
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
     config.save(str(tmp_file_name))
-    config2 = ConfigForTests(config_path_or_dictionary={"save": 1})
+    config2 = make_config({"save": 1}, do_not_merge_command_line=True)
     config2.merge(str(tmp_file_name))
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
     config2.save(str(tmp_file_name))
-    config3 = ConfigForTests(config_path_or_dictionary={"save": 1})
+    config3 = make_config({"save": 1}, do_not_merge_command_line=True)
     config3.merge(str(tmp_file_name))
     captured = capsys.readouterr()
     assert captured.out.count("WARNING") == 1
@@ -519,25 +404,37 @@ def test_save_reload_method_param(capsys, tmp_file_name):
     assert config == config2 == config3
 
 
-def test_craziest_config(capsys, yaml_craziest_config):
-    config = ConfigForTests.build_from_configs(yaml_craziest_config[0],
-                                               do_not_merge_command_line=True)
+def test_craziest_config(capsys, yaml_craziest_config, tmp_file_name):
+    class Storage:
+        def __init__(self, **kwargs):
+            self.stored = kwargs
+
+        def __repr__(self):
+            return f"<STORED: {self.stored}>"
+
+        def __eq__(self, other):
+            return self.stored == other.stored
+    post_processing = {"*p4": lambda x: Storage(**x)}
+    config = make_config(yaml_craziest_config[0], do_not_merge_command_line=True, additional_configs_suffix="_path")
     second = os.path.join(Path(yaml_craziest_config[0]).parents[0], "d_second.yaml")
     third = os.path.join(Path(yaml_craziest_config[0]).parents[0], "d_third.yaml")
+    dico_str = "{'a': 4}"
+    dico_str2 = "{'b': 5}"
     s = f"\nMAIN CONFIG :\n" \
         f"Configuration hierarchy :\n" \
         f"> {yaml_craziest_config[0]}\n\n" \
         f" - p1 : 1\n - c1 : \n	C1 CONFIG :\n	 - c2 : \n		C2 CONFIG :\n		 - c3 : \n" \
         f"			C3 CONFIG :\n			 - p2 : 2\n			 - c5 : \n				C5 CONFIG :\n" \
-        f"				 - c6 : \n					C6 CONFIG :\n					 - p4 : 4\n\n" \
+        f"				 - c6 : \n					C6 CONFIG :\n					 - p4 : {dico_str}\n\n" \
         f"				 - p5 : 5\n" \
         f"				 - s_path : {third}\n\n\n		 - p6 : 6\n		 - f_path : {second}\n\n\n" \
         f" - c4 : \n	C4 CONFIG :\n	 - p3 : 3\n	 - p7 : 7\n\n - c3 : \n	C3 CONFIG :\n	 - p2 : 2\n	 - c5 : \n" \
-        f"		C5 CONFIG :\n		 - c6 : \n			C6 CONFIG :\n			 - p4 : 4\n\n		 - p5 : 5\n" \
+        f"		C5 CONFIG :\n		 - c6 : \n			C6 CONFIG :\n			 - p4 : {dico_str}\n\n		 - p5 : 5\n" \
         f"		 - s_path : {third}\n\n\n - p6 : 6\n - f_path : {second}\n"
     assert config.details() == s
-    config = ConfigForTests.build_from_configs(yaml_craziest_config[0], yaml_craziest_config[1],
-                                               do_not_merge_command_line=True)
+    config = make_config(yaml_craziest_config[0], yaml_craziest_config[1],
+                         do_not_merge_command_line=True, additional_configs_suffix="_path",
+                         post_processing_dict=post_processing)
     second_e = os.path.join(Path(yaml_craziest_config[0]).parents[0], "e_second.yaml")
     s = f"\nMAIN CONFIG :\n" \
         f"Configuration hierarchy :\n" \
@@ -545,33 +442,40 @@ def test_craziest_config(capsys, yaml_craziest_config):
         f"> {yaml_craziest_config[1]}\n\n" \
         f" - p1 : 1\n - c1 : \n	C1 CONFIG :\n	 - c2 : \n		C2 CONFIG :\n		 - c3 : \n" \
         f"			C3 CONFIG :\n			 - p2 : 2\n			 - c5 : \n				C5 CONFIG :\n" \
-        f"				 - c6 : \n					C6 CONFIG :\n					 - p4 : 8\n\n" \
+        f"				 - c6 : \n					C6 CONFIG :\n					 - p4 : <STORED: {dico_str2}>\n\n" \
         f"				 - p5 : 8\n" \
         f"				 - s_path : {third}\n\n\n		 - p6 : 7\n		 - f_path : {second_e}\n\n\n" \
         f" - c4 : \n	C4 CONFIG :\n	 - p3 : test\n	 - p7 : test2\n\n - c3 : \n	C3 CONFIG :\n	 - p2 : 2\n	 - c5" \
-        f" : \n		C5 CONFIG :\n		 - c6 : \n			C6 CONFIG :\n			 - p4 : 4\n\n		 - p5 : 5\n" \
-        f"		 - s_path : {third}\n\n\n - p6 : 7\n - f_path : {second}\n"
+        f" : \n		C5 CONFIG :\n		 - c6 : \n			C6 CONFIG :\n			 - p4 : <STORED: {dico_str}>\n\n" \
+        f"		 - p5 : 5\n		 - s_path : {third}\n\n\n - p6 : 7\n - f_path : {second}\n"
     assert config.details() == s
+    config.save(str(tmp_file_name))
+    config2 = make_config(yaml_craziest_config[0], str(tmp_file_name),
+                          do_not_merge_command_line=True, additional_configs_suffix="_path",
+                          post_processing_dict=post_processing)
+    assert config == config2
+    dico = config._get_command_line_dict(config.get_command_line_argument(do_return_string=True))
+    assert config == make_config(dico, post_processing_dict=post_processing)
 
 
 def test_pattern_matching():
-    assert ConfigForTests._compare_string_pattern("", "*")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123,:", "*")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123", "abcdefgh0123")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123", "abcde*gh0123")
-    assert ConfigForTests._compare_string_pattern("abcdeffffgh0123", "abcde*gh0123")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123", "*a*b*c*d*e*f*g*h*0*1*2*3*")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123", "*0123")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123", "abcd*")
-    assert ConfigForTests._compare_string_pattern("abcdefgh0123", "a**3")
+    assert compare_string_pattern("", "*")
+    assert compare_string_pattern("abcdefgh0123,:", "*")
+    assert compare_string_pattern("abcdefgh0123", "abcdefgh0123")
+    assert compare_string_pattern("abcdefgh0123", "abcde*gh0123")
+    assert compare_string_pattern("abcdeffffgh0123", "abcde*gh0123")
+    assert compare_string_pattern("abcdefgh0123", "*a*b*c*d*e*f*g*h*0*1*2*3*")
+    assert compare_string_pattern("abcdefgh0123", "*0123")
+    assert compare_string_pattern("abcdefgh0123", "abcd*")
+    assert compare_string_pattern("abcdefgh0123", "a**3")
 
-    assert not ConfigForTests._compare_string_pattern("abcdefgh0123", "abcdefgh012")
-    assert not ConfigForTests._compare_string_pattern("abcdefgh0123", "abcde*g0123")
-    assert not ConfigForTests._compare_string_pattern("abcdefgh0123ffffh0123", "abcde*gh0123")
-    assert not ConfigForTests._compare_string_pattern("abcdefgh0123", "*3*3*3")
+    assert not compare_string_pattern("abcdefgh0123", "abcdefgh012")
+    assert not compare_string_pattern("abcdefgh0123", "abcde*g0123")
+    assert not compare_string_pattern("abcdefgh0123ffffh0123", "abcde*gh0123")
+    assert not compare_string_pattern("abcdefgh0123", "*3*3*3")
 
 
-def test_warnings(capsys, tmp_file_name):
+def test_warnings(capsys, tmp_file_name, yaml_default):
     # config = ConfigForTests(config_path_or_dictionary={"param": None, "lparam": [], "dparam": {"param2": 1}})
     # config.merge_from_command_line("--param=1 --lparam=[1] --dparam={param2:2,param3:3}")
     # captured = capsys.readouterr()
@@ -579,81 +483,78 @@ def test_warnings(capsys, tmp_file_name):
     # assert captured.out.count("is an empty list. It cannot be replaced from the") == 1
     # assert captured.out.count(" key. This key will be set") == 1
     # assert config.dparam == {"param2": 2, "param3": None}
-    config = ConfigForTests(config_path_or_dictionary={"param": 1}, overwriting_regime="unsafe")
+    config = make_config({"param": 1}, do_not_merge_command_line=True, overwriting_regime="unsafe")
     config.save(str(tmp_file_name))
     config.merge(str(tmp_file_name))
     captured = capsys.readouterr()
     assert captured.out.count("YOU ARE LOADING AN UNSAFE CONFIG") == 1
-    config = ConfigForTests(config_path_or_dictionary={"param": 1})
+    config = make_config({"param": 1}, do_not_merge_command_line=True)
     config.merge({"*d": 1})
     captured = capsys.readouterr()
     assert captured.out.count("will be ignored : it does not match any") == 1
 
 
-def test_errors(capsys, yaml_default_unlinked, yaml_default_sub_variations, yaml_default_set_twice):
+def test_errors(capsys, yaml_default_unlinked, yaml_default_sub_variations, yaml_default_set_twice, yaml_default):
     with pytest.raises(Exception, match="'overwriting_regime' needs to be either 'auto-save', 'locked' or 'unsafe'."):
-        _ = ConfigForTests(config_path_or_dictionary={"param": 1}, overwriting_regime="a")
+        _ = make_config({"param": 1}, do_not_merge_command_line=True, overwriting_regime="a")
     with pytest.raises(Exception, match=".*is not a sub-config, it cannot be accessed.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"param": 1})["param.param"]
+        _ = make_config({"param": 1}, do_not_merge_command_line=True)["param.param"]
     with pytest.raises(Exception, match="Overwriting params in locked configs is not allowed."):
-        config = ConfigForTests(config_path_or_dictionary={"param": 1}, overwriting_regime="locked")
+        config = make_config({"param": 1}, do_not_merge_command_line=True, overwriting_regime="locked")
         config.param = 2
     with pytest.raises(Exception, match="build_from_configs needs to be called with at least one config."):
-        _ = ConfigForTests.build_from_configs(do_not_merge_command_line=True)
+        _ = template().build_from_configs(do_not_merge_command_line=True)
     with pytest.raises(Exception, match="build_from_configs needs to be called with at least one config."):
-        _ = ConfigForTests.build_from_configs([], do_not_merge_command_line=True)
+        _ = template().build_from_configs([], do_not_merge_command_line=True)
     with pytest.raises(Exception, match=".*\nplease use build_from_configs.*"):
-        _ = ConfigForTests.build_from_configs([ConfigForTests.get_default_config_path()], [{"param1": 1}],
-                                              do_not_merge_command_line=True)
+        _ = template().build_from_configs([template(default_config=yaml_default).get_default_config_path()],
+                                          [{"param1": 1}],
+                                          do_not_merge_command_line=True)
     with pytest.raises(Exception, match="No filename was provided.*"):
-        ConfigForTests(config_path_or_dictionary={"param": 1}).save()
+        make_config({"param": 1}).save()
     with pytest.raises(Exception, match="Grid element.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"param": 1, "var": [], "grid": ["var"]}).create_variations()
+        _ = make_config({"param": 1, "var": [], "grid": ["var"]}, config_class=template()).create_variations()
     with pytest.raises(Exception, match="Grid element.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"param": 1, "grid": ["var"]}).create_variations()
+        _ = make_config({"param": 1, "grid": ["var"]}, config_class=template()).create_variations()
     with pytest.raises(Exception, match="Variations parsing failed.*"):
-        ConfigForTests(config_path_or_dictionary={"param": 1, "var": 1})
+        make_config({"param": 1, "var": 1}, config_class=template())
     with pytest.raises(Exception, match="Variations parsing failed.*"):
-        ConfigForTests(config_path_or_dictionary={"param": 1, "var": [1]})
+        make_config({"param": 1, "var": [1]}, config_class=template())
     with pytest.raises(Exception, match="Variations parsing failed.*"):
-        ConfigForTests(config_path_or_dictionary={"param": 1, "var": {"a": 1}})
+        make_config({"param": 1, "var": {"a": 1}}, config_class=template())
     with pytest.raises(Exception, match="Grid parsing failed.*"):
-        ConfigForTests(config_path_or_dictionary={"param": 1, "grid": {}})
+        make_config({"param": 1, "grid": {}}, config_class=template())
     with pytest.raises(Exception, match="ERROR : path not found .*"):
-        ConfigForTests(config_path_or_dictionary="not_found")
+        template()(config_path_or_dictionary="not_found")
     with pytest.raises(Exception, match="'config_metadata' is a special parameter.*"):
-        ConfigForTests(config_path_or_dictionary={"config_metadata": 1})
+        make_config({"config_metadata": 1})
     with pytest.raises(Exception, match="'overwriting_regime' is a special parameter.*"):
         metadata = 'Saving time : <date> (<in_seconds>) ; Regime : something_incorrect'
-        ConfigForTests(config_path_or_dictionary={"config_metadata": metadata})
+        make_config({"config_metadata": metadata})
     with pytest.raises(Exception, match="Failed to set parameter.*"):
-        config = ConfigForTests(config_path_or_dictionary={"param": 1})
+        config = make_config({"param": 1})
         config.merge({"param.param": 1})
     with pytest.raises(Exception, match="Failed to set parameter.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"param": 1, "param.param": 1})
+        _ = make_config({"param": 1, "param.param": 1})
     with pytest.raises(Exception, match=".*character is not authorized in the default config.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"param*": 1})
+        _ = make_config({"param*": 1})
     with pytest.raises(Exception, match=".*Unlinked sub-configs are not allowed.*"):
-        _ = ConfigForTests(config_path_or_dictionary=yaml_default_unlinked)
+        _ = make_config(yaml_default_unlinked)
     captured = capsys.readouterr()
     assert captured.out.count("ERROR while pre-processing param") == 4
     with pytest.raises(Exception, match=".*Please declare all your variations in the main config.*"):
-        _ = ConfigForTests(config_path_or_dictionary=yaml_default_sub_variations)
+        _ = make_config(yaml_default_sub_variations, config_class=template())
     with pytest.raises(Exception, match=".*is a protected name and cannot be used as a parameter.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"_nesting_hierarchy": 1})
+        _ = make_config({"_nesting_hierarchy": 1})
     with pytest.raises(Exception, match=".*cannot be merged : it is not in the default.*"):
-        config = ConfigForTests(config_path_or_dictionary={"param": 1})
+        config = make_config({"param": 1})
         config.merge({"subconfig.param": 1})
     with pytest.raises(Exception, match=".*cannot be merged : it is not in the default.*"):
-        config = ConfigForTests(config_path_or_dictionary={"param": 1})
+        config = make_config({"param": 1})
         config.merge({"param2": 1})
     with pytest.raises(Exception, match=".*This replacement cannot be performed.*"):
-        subconfig = ConfigForTests(config_path_or_dictionary={"param": 1})
-        config = ConfigForTests(config_path_or_dictionary={"subconfig": subconfig})  # don't do this at home
+        subconfig = make_config({"param": 1})
+        config = make_config({"subconfig": subconfig})  # don't do this at home
         config.merge({"subconfig": 1})
     with pytest.raises(Exception, match=".* was set twice.*"):
-        _ = ConfigForTests(config_path_or_dictionary={"param": 1, "set_twice_path": yaml_default_set_twice})
-
-
-if __name__ == '__main__':
-    ConfigForTests(config_path_or_dictionary={"param": 1})["param.param"]
+        _ = make_config({"param": 1, "set_twice_path": yaml_default_set_twice}, config_class=template())

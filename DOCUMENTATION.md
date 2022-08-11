@@ -77,6 +77,14 @@ your parameters (see _“Advanced features : Pre-processing”, “Advanced feat
 files” and “Advanced features : Defining variations for a config”_). **If those two elements are not set the
 config system will throw an error when it is used**, which should make it obvious that something is missing.
 
+Alternatively, if you have a small project and want to keep it very simple, you can use our template class :
+
+```python
+from rr.ml.config import get_template_class
+
+ProjectConfiguration = get_template_class(default_config_path="path/to/default_config.yaml")
+```
+
 You can now load your configuration. The default config will always be loaded first, so we do not need to
 mention it again :
 
@@ -102,6 +110,11 @@ You can then call any parameter like you would an attribute of this object. For 
 layers would be `config.network_layers`, or the dataset version would be `config.dataset_version`. Accessing
 parameters can also be done using conventional dictionary operations, for instance `config["network_layers"]`
 or `config.get("network_layers")` would work.
+
+NB : if you want to create a config with no defaults, for example from a dictionary (in a short script or in 
+a jupyter notebook for instance), you can simply use `make_config(dict)`. The `make_config` function is the 
+fastest, simplest way to create a bare-bone Configuration object out of a native python object. It uses a 
+template Configuration subclass to create a config object with no defaults and no processing.
 
 ### Simple usage examples
 

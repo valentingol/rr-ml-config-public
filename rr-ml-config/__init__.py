@@ -16,5 +16,6 @@ Copyright (C) 2022  Reactive Reality
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
-from rr.ml.config.config import Configuration
-from rr.ml.config.config_history import ConfigHistory
+from .config import Configuration
+from .config_history import ConfigHistory
+from .user_utils import make_config, get_template_class
