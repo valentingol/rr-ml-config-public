@@ -16,48 +16,58 @@ Copyright (C) 2022  Reactive Reality
     along with this program.  If not, see <https://www.gnu.org/licenses/>.
 """
 
+import copy
 import yaml
 import os
 import sys
-import functools
 import time
 from copy import deepcopy
 from pathlib import Path
+from typing import (
+    Union,
+    Optional,
+    List,
+    Dict,
+    Tuple,
+    Any,
+    ItemsView,
+    KeysView,
+    ValuesView,
+    Callable,
+    Type,
+)
 
+from .config_utils import (
+    adapt_to_type,
+    are_same_sub_configs,
+    compare_string_pattern,
+    dict_apply,
+    escape_symbols,
+    get_param_as_parsable_string,
+    is_type_valid,
+    recursive_set_attribute,
+    update_state,
+)
 
-def update_state(state_descriptor):
-    def decorator_update_state(func):
-        @functools.wraps(func)
-        def wrapper_update_state(self, *args, **kwargs):
-            state_to_append = state_descriptor.split(";")[0]  # state name
-            for i in state_descriptor.split(";")[1:]:
-                state_to_append += f";{getattr(self, i)}"  # additional information
-            self._state.append(
-                state_to_append + f";arg0={args[0]}"
-            )  # first arg of function call
-            value = func(self, *args, **kwargs)
-            self._state.pop(-1)
-            return value
-
-        return wrapper_update_state
-
-    return decorator_update_state
+ConfigDeclarator = Union[str, dict]
+VariationDeclarator = Union[List[ConfigDeclarator], Dict[str, ConfigDeclarator]]
 
 
 class Configuration:
     def __init__(
         self,
-        name="main",
-        overwriting_regime="auto-save",
-        config_path_or_dictionary=None,
-        nesting_hierarchy=None,
-        state=None,
-        main_config=None,
-        from_argv=False,
+        name: str = "main",
+        overwriting_regime: str = "auto-save",
+        config_path_or_dictionary: Optional[ConfigDeclarator] = None,
+        nesting_hierarchy: Optional[List[str]] = None,
+        state: Optional[List[str]] = None,
+        main_config: Optional["Configuration"] = None,
+        from_argv: bool = False,
+        do_not_pre_process: bool = False,
     ):
         """
-        Should probably never be called directly by the user. Please use one of the constructors instead (load_config,
-        build_from_configs, build_from_argv).
+        Should never be called directly by the user. Please use one of the constructors instead (load_config,
+        build_from_configs, build_from_argv), or the utils.make_config convenience function.
         :param name: name for the config or sub-config
         :param overwriting_regime: can be "auto-save" (default, when a param is overwritten it is merged instead and the
         config is saved automatically if it had been saved previously), "locked" (params can't be overwritten except
@@ -67,6 +77,8 @@ class Configuration:
         config
         :param state: processing state used for state tracking and debugging
         :param main_config: main config corresponding to this sub-config, or None if this config is the main config
+        :param from_argv: whether the config was created with configs passed from the command line arguments
+        :param do_not_pre_process: if true, pre-processing is deactivated in this initialization
         :return: none
         """
         config_path_or_dictionary = (
@@ -76,18 +88,20 @@ class Configuration:
         )
 
         # PROTECTED ATTRIBUTES
-        object.__setattr__(self, "_can_set_attributes", True)
+        object.__setattr__(self, "_operating_creation_or_merging", True)
         self._state = [] if state is None else state
         self._main_config = self if main_config is None else main_config
         self._methods = [
             name
             for name in dir(self)
-            if name not in ["_can_set_attributes", "_state", "_main_config"]
+            if name not in ["_operating_creation_or_merging", "_state", "_main_config"]
         ]
         self._name = name
-        self._pre_process_master_switch = True
+        self._pre_process_master_switch = not do_not_pre_process
         self._reference_folder = None
         self._was_last_saved_as = None
+        self._modified_buffer = []
+        self._pre_postprocessing_values = {}
         self._variation_name = (
             None if main_config is None else main_config.get_variation_name()
         )
@@ -138,15 +152,15 @@ class Configuration:
         if not self._nesting_hierarchy:
             self._check_for_unlinked_sub_configs()
         if main_config is None:
-            self.turn_on_pre_processing()
+            self.set_pre_processing(True)
         self._state.pop(-1)
-        self._can_set_attributes = False
+        self._operating_creation_or_merging = False
 
     def __repr__(self):
         return "<Configuration:" + self.get_name() + ">"
 
     def __eq__(self, other):
-        if not isinstance(other, self.__class__):
+        if not isinstance(other, Configuration):
             return False
         for param in self._get_user_defined_attributes():
             try:
@@ -172,7 +186,7 @@ class Configuration:
                 else item.split(".")[0]
             )
             sub_config = getattr(self, sub_config_name)
-            if not isinstance(sub_config, self.__class__):
+            if not isinstance(sub_config, Configuration):
                 raise TypeError(
                     f"As the parameter '{sub_config_name}' is not a sub-config, it cannot be accessed.\n"
                     f"{self._did_you_mean(sub_config_name, filter_type=self.__class__)}"
@@ -183,13 +197,13 @@ class Configuration:
 
     def __setattr__(self, key, value):
         if (
-            self._can_set_attributes
-            or self._main_config.get_attribute_changeability()
+            self._operating_creation_or_merging
+            or self._main_config.is_in_operation()
             or self.config_metadata["overwriting_regime"] == "unsafe"
         ):
             object.__setattr__(self, key, value)
         elif self.config_metadata["overwriting_regime"] == "auto-save":
-            self.merge({key: value}, verbose=True, from_code=True)
+            self._manual_merge({key: value}, verbose=True, from_code=True)
         elif self.config_metadata["overwriting_regime"] == "locked":
             raise RuntimeError("Overwriting params in locked configs is not allowed.")
         else:
@@ -203,8 +217,10 @@ class Configuration:
             return object.__getattribute__(self, item)
         except AttributeError:
             if not item.startswith("_"):
-                raise AttributeError(f"Unknown parameter of the configuration : '{item}'.\n"
-                                     f"{self._did_you_mean(item)}")
+                raise AttributeError(
+                    f"Unknown parameter of the configuration : '{item}'.\n"
+                    f"{self._did_you_mean(item)}"
+                )
             else:
                 raise AttributeError
 
@@ -214,22 +230,24 @@ class Configuration:
     @classmethod
     def load_config(
         cls,
-        *config_paths,
-        default_config_path=None,
-        overwriting_regime="auto-save",
-        do_not_merge_command_line=False,
-        verbose=True,
+        *configs: Union[List[ConfigDeclarator], ConfigDeclarator],
+        default_config_path: Optional[ConfigDeclarator] = None,
+        overwriting_regime: str = "auto-save",
+        do_not_merge_command_line: bool = False,
+        do_not_pre_process: bool = False,
+        verbose: bool = True,
         **kwargs,
     ):
         """
         First creates a config using the default config, then merges config_path into it. If config_path is a list,
         successively merges all configs in the list instead from index 0 to the last.
-        :param config_paths: config's path or dictionary, or list of default config's paths or dictionaries to merge
+        :param configs: config's path or dictionary, or list of default config's paths or dictionaries to merge
         :param default_config_path: default config's path or dictionary
         :param overwriting_regime: can be "auto-save" (default, when a param is overwritten it is merged instead and the
         config is saved automatically if it had been saved previously), "locked" (params can't be overwritten except
         using merge explicitly) or "unsafe" (params can be freely overwritten but reproducibility is not guaranteed).
-        :param do_not_merge_command_line: if True, prevents the execution of the _merge_command_line function
+        :param do_not_merge_command_line: if True, does not try to merge the command line parameters
+        :param do_not_pre_process: if true, pre-processing is deactivated in this initialization
         :param verbose: controls the verbose in the config creation process
         :return: instance of Configuration object containing the desired config
         """
@@ -243,23 +261,31 @@ class Configuration:
         config = cls(
             config_path_or_dictionary=default_config_path,
             overwriting_regime=overwriting_regime,
+            do_not_pre_process=do_not_pre_process,
             **kwargs,
         )
-        if config_paths and isinstance(config_paths[0], list):
-            config_paths = config_paths[0]
-        for path in config_paths:
-            config.merge(path, verbose=verbose)
+        if configs and isinstance(configs[0], list):
+            configs = configs[0]
+        for path in configs:
+            config._merge(path, do_not_pre_process=do_not_pre_process, verbose=verbose)
         if not do_not_merge_command_line:
-            config._merge_command_line()
+            to_merge = config._get_command_line_dict()
+            if to_merge:
+                print(f"Merging from command line : {to_merge}")
+                config._merge(
+                    to_merge, do_not_pre_process=do_not_pre_process, verbose=verbose
+                )
+        config._post_process_modified_parameters()
         return config
 
     @classmethod
     def build_from_configs(
         cls,
-        *configs,
-        overwriting_regime="auto-save",
-        do_not_merge_command_line=False,
-        verbose=True,
+        *configs: Union[List[ConfigDeclarator], ConfigDeclarator],
+        overwriting_regime: str = "auto-save",
+        do_not_merge_command_line: bool = False,
+        do_not_pre_process: bool = False,
+        verbose: bool = True,
         **kwargs,
     ):
         """
@@ -269,7 +295,8 @@ class Configuration:
         :param overwriting_regime: can be "auto-save" (default, when a param is overwritten it is merged instead and the
         config is saved automatically if it had been saved previously), "locked" (params can't be overwritten except
         using merge explicitly) or "unsafe" (params can be freely overwritten but reproducibility is not guaranteed).
-        :param do_not_merge_command_line: if True, prevents the execution of the _merge_command_line function
+        :param do_not_merge_command_line: if True, does not try to merge the command line parameters
+        :param do_not_pre_process: if true, pre-processing is deactivated in this initialization
         :param verbose: controls the verbose in the config creation process
         :return: instance of Configuration object containing the desired config
         """
@@ -289,6 +316,7 @@ class Configuration:
             default_config_path=configs[0],
             overwriting_regime=overwriting_regime,
             do_not_merge_command_line=do_not_merge_command_line,
+            do_not_pre_process=do_not_pre_process,
             verbose=verbose,
             **kwargs,
         )
@@ -296,11 +324,12 @@ class Configuration:
     @classmethod
     def build_from_argv(
         cls,
-        fallback=None,
-        default_config_path=None,
-        overwriting_regime="auto-save",
-        do_not_merge_command_line=False,
-        verbose=True,
+        fallback: Optional[str] = None,
+        default_config_path: Optional[ConfigDeclarator] = None,
+        overwriting_regime: str = "auto-save",
+        do_not_merge_command_line: bool = False,
+        do_not_pre_process: bool = False,
+        verbose: bool = True,
         **kwargs,
     ):
         """
@@ -313,7 +342,8 @@ class Configuration:
         :param overwriting_regime: can be "auto-save" (default, when a param is overwritten it is merged instead and the
         config is saved automatically if it had been saved previously), "locked" (params can't be overwritten except
         using merge explicitly) or "unsafe" (params can be freely overwritten but reproducibility is not guaranteed).
-        :param do_not_merge_command_line: if True, prevents the execution of the _merge_command_line function
+        :param do_not_merge_command_line: if True, does not try to merge the command line parameters
+        :param do_not_pre_process: if true, pre-processing is deactivated in this initialization
         :param verbose: controls the verbose in the config creation process
         :return: instance of Configuration object containing the desired config
         """
@@ -330,12 +360,15 @@ class Configuration:
             default_config_path=default_config_path,
             overwriting_regime=overwriting_regime,
             do_not_merge_command_line=do_not_merge_command_line,
+            do_not_pre_process=do_not_pre_process,
             verbose=verbose,
             from_argv=True,
             **kwargs,
         )
 
-    def compare(self, other, reduce=False):
+    def compare(
+        self, other: "Configuration", reduce: bool = False
+    ) -> List[Tuple[str, Optional[Any]]]:
         """
         Returns a list of tuples, where each tuple represents a parameter that is different between the "self"
         configuration and the "other" configuration. Tuples are written in the form :
@@ -355,7 +388,7 @@ class Configuration:
                         [
                             p
                             for p in object_to_check.get_parameter_names(deep=True)
-                            if self._compare_string_pattern(p, "*." + to_display)
+                            if compare_string_pattern(p, "*." + to_display)
                         ]
                     )
                     != 1
@@ -379,7 +412,7 @@ class Configuration:
                 if not reduce:
                     differences.append((displayed_name, value_in_other))
                 else:
-                    if not isinstance(value_in_self, self.__class__):
+                    if not isinstance(value_in_self, Configuration):
                         if isinstance(value_in_self, dict) and isinstance(
                             value_in_other, dict
                         ):
@@ -399,20 +432,20 @@ class Configuration:
             _, value_in_other, displayed_name = _investigate_parameter(name, other)
             if name not in self.get_parameter_names() and value_in_other is not None:
                 if reduce:
-                    if not isinstance(value_in_other, self.__class__):
+                    if not isinstance(value_in_other, Configuration):
                         differences.append((displayed_name, value_in_other))
                 else:
                     differences.append((displayed_name, value_in_other))
         return differences
 
-    def copy(self):
+    def copy(self) -> "Configuration":
         """
         Returns a safe, independent copy of the config
         :return: instance of Configuration that is a deep copy of the config
         """
         return deepcopy(self)
 
-    def create_variations(self):
+    def create_variations(self) -> List["Configuration"]:
         """
         Creates a list of configs that are derived from the current config using the internally tracked variations and
         grids registered via the corresponding functions (register_as_config_variations and register_as_grid).
@@ -520,7 +553,13 @@ class Configuration:
             )
         return variation_configs
 
-    def details(self, show_only=None, expand_only=None, no_show=None, no_expand=None):
+    def details(
+        self,
+        show_only: Optional[Union[str, List[str]]] = None,
+        expand_only: Optional[Union[str, List[str]]] = None,
+        no_show: Optional[Union[str, List[str]]] = None,
+        no_expand: Optional[Union[str, List[str]]] = None,
+    ) -> str:
         """
         Creates and returns a string describing all the parameters in the config and its sub-configs.
         :param show_only: if not None, list of names referring to params. Only params in the list are displayed in
@@ -546,31 +585,13 @@ class Configuration:
             )
             return None if not new else new
 
-        def _match_params(names):
-            if names is None or (len(names) == 1 and names[0] is None):
-                return None
-            new_names = [n for n in names if "*" not in n]
-            for name in [n for n in names if "*" in n]:
-                new_names = new_names + [
-                    p
-                    for p in self.get_parameter_names(deep=True)
-                    if self._compare_string_pattern(p, name)
-                ]
-            return new_names
-
-        def _dict_apply(dictionary, function):
-            return {k: function(v) for k, v in dictionary.items()}
-
         constraints = {
             "show_only": show_only,
             "expand_only": expand_only,
             "no_show": no_show,
             "no_expand": no_expand,
         }
-        constraints = _dict_apply(
-            constraints, lambda x: x if isinstance(x, list) else [x]
-        )
-        constraints = _dict_apply(constraints, _match_params)
+        constraints = dict_apply(constraints, self.match_params)
         string_to_return = (
             "\n"
             + "\t" * len(self._nesting_hierarchy)
@@ -600,7 +621,7 @@ class Configuration:
             string_to_return += (
                 "\t" * len(self._nesting_hierarchy) + " - " + attribute + " : "
             )
-            if isinstance(self[attribute], self.__class__):
+            if isinstance(self[attribute], Configuration):
                 if (
                     constraints["no_expand"] is None
                     or attribute not in constraints["no_expand"]
@@ -611,7 +632,7 @@ class Configuration:
                 ):
                     string_to_return += (
                         self[attribute].details(
-                            **(_dict_apply(constraints, _for_sub_config))
+                            **(dict_apply(constraints, _for_sub_config))
                         )
                         + "\n"
                     )
@@ -621,7 +642,7 @@ class Configuration:
                 string_to_return += str(self[attribute]) + "\n"
         return string_to_return
 
-    def get(self, parameter_name, default_value):
+    def get(self, parameter_name: str, default_value: Any) -> Any:
         """
         Behaves similarly to dict.get(parameter_name, default_value)
         :param parameter_name: parameter to query
@@ -633,7 +654,7 @@ class Configuration:
         except (AttributeError, TypeError):
             return default_value
 
-    def get_all_linked_sub_configs(self):
+    def get_all_linked_sub_configs(self) -> List["Configuration"]:
         """
         Returns the list of all sub-configs that are directly linked to the root config by a chain of other sub-configs.
         For this to be the case, all of those sub-configs need to be contained directly in a parameter of another
@@ -643,7 +664,7 @@ class Configuration:
         all_linked_configs = []
         for i in self._get_user_defined_attributes():
             object_to_scan = getattr(self, "___" + i if i in self._methods else i)
-            if isinstance(object_to_scan, self.__class__):
+            if isinstance(object_to_scan, Configuration):
                 all_linked_configs = (
                     all_linked_configs
                     + [object_to_scan]
@@ -651,7 +672,7 @@ class Configuration:
                 )
         return all_linked_configs
 
-    def get_all_sub_configs(self):
+    def get_all_sub_configs(self) -> List["Configuration"]:
         """
         Returns the list of all sub-configs, including sub-configs of other sub-configs
         :return: list corresponding to the sub-configs
@@ -661,66 +682,36 @@ class Configuration:
             all_configs = all_configs + i.get_all_sub_configs()
         return all_configs
 
-    def get_attribute_changeability(self):
-        return self._can_set_attributes
+    def is_in_operation(self) -> bool:
+        return self._operating_creation_or_merging
 
     def get_command_line_argument(
-        self, deep=True, do_return_string=False, ignore_unknown_types=False
-    ):
-        def _escape_symbols(string_to_escape, symbols):
-            for symbol in symbols:
-                string_to_escape = string_to_escape.replace(symbol, f"\\{symbol}")
-            return string_to_escape
-
-        def _get_param_as_string(param, in_iterable=False):
-            if param is None:
-                return "none"
-            elif isinstance(param, list):
-                return f"[{','.join([_get_param_as_string(i, True) for i in param])}] !list"
-            elif isinstance(param, dict):
-                return (
-                    "{"
-                    + ",".join(
-                        [
-                            f"{k}:{_get_param_as_string(v, True)}"
-                            for k, v in param.items()
-                        ]
-                    )
-                    + "} !dict"
-                )
-            else:
-                if isinstance(param, int):
-                    type_forcing = "int"
-                elif isinstance(param, float):
-                    type_forcing = "float"
-                elif isinstance(param, str):
-                    type_forcing = "str"
-                elif isinstance(param, bool):
-                    type_forcing = "bool"
-                elif ignore_unknown_types:
-                    print(
-                        f"WARNING: parameter value '{param}' will not have its type enforced because it is not in "
-                        f"[int, float, str, bool]."
-                    )
-                    type_forcing = ""
-                else:
-                    raise TypeError(
-                        f"Parameter value '{param}' will not have its type enforced because it is not in "
-                        f"[int, float, str, bool]. Pass ignore_unknown_types=True to avoid enforcing "
-                        f"type when type is unknown."
-                    )
-                value = str(param)
-                value = _escape_symbols(value, ["\\"])
-                if in_iterable:
-                    value = _escape_symbols(value, ["{", "}", "[", "]", ","])
-                    value = _escape_symbols(value, ["{", "}", "[", "]", ","])
-                value = _escape_symbols(value, ["'", '"', " "])
-                return value + (f" !{type_forcing}" if type_forcing else "")
-
+        self,
+        deep: bool = True,
+        do_return_string: bool = False,
+        ignore_unknown_types: bool = False,
+    ) -> Union[List[str], str]:
+        """
+        Returns a list of command line parameters that can be used in the command line to re-create this exact config
+        from the default. Can alternatively return the string itself with do_return_string=True.
+        :param deep: whether to also take the sub-config parameters into account
+        :param do_return_string: whether to return a string (True) or a list of strings (False, default)
+        :param ignore_unknown_types: if False (default), types that cannot be parsed in YAML raise an error. Else, they
+        are skipped when creating the list.
+        :return: list or string containing the parameters
+        """
         to_return = []
         for p in self.get_parameter_names(deep=deep):
-            if not isinstance(self[p], self.__class__):
-                pair = _get_param_as_string(self[p])
+            if not isinstance(self[p], Configuration):
+                pair = get_param_as_parsable_string(
+                    self[p]
+                    if ".".join(self.get_nesting_hierarchy() + [p])
+                    not in self.get_main_config()._pre_postprocessing_values
+                    else self.get_main_config()._pre_postprocessing_values[
+                        ".".join(self.get_nesting_hierarchy() + [p])
+                    ],
+                    ignore_unknown_types=ignore_unknown_types,
+                )
                 if pair.count(" !"):
                     pair_as_list = pair.split(" !")
                     param_value, param_force = (
@@ -728,24 +719,24 @@ class Configuration:
                         pair_as_list[-1],
                     )
                     to_return.append(
-                        _escape_symbols(
+                        escape_symbols(
                             f"--{p} '{param_value}' !{param_force}", ["{", "}", "*"]
                         )
                     )
                 else:
-                    to_return.append(_escape_symbols(f"--{p} {pair}", ["{", "}", "*"]))
+                    to_return.append(escape_symbols(f"--{p} {pair}", ["{", "}", "*"]))
 
         return " ".join(to_return) if do_return_string else to_return
 
     @staticmethod
-    def get_default_config_path():
+    def get_default_config_path() -> str:
         """
         Returns the path to the default config of the project. This function must be implemented at project-level.
         :return: string corresponding to the path to the default config of the project
         """
         raise NotImplementedError
 
-    def get_dict(self, deep=True):
+    def get_dict(self, deep: bool = True) -> dict:
         """
         Returns a dictionary corresponding to the config.
         :param deep: whether to recursively turn sub-configs into dicts or keep them as sub-configs
@@ -754,16 +745,20 @@ class Configuration:
         return {
             key: (
                 self[key]
-                if not deep or not isinstance(self[key], self.__class__)
+                if not deep or not isinstance(self[key], Configuration)
                 else self[key].get_dict()
             )
             for key in self._get_user_defined_attributes()
         }
 
-    def get_main_config(self):
+    def get_main_config(self) -> "Configuration":
+        """
+        Getter for the main config corresponding to this config or sub-config. Using this is often hacky.
+        :return: the main config
+        """
         return self._main_config
 
-    def get_name(self):
+    def get_name(self) -> str:
         """
         Returns the name of the config. It is composed of a specified part (or 'main' when unspecified) and an indicator
         of its index in the list of variations of its parent if it is a variation of a config. This indicator is
@@ -777,14 +772,14 @@ class Configuration:
         )
         return self._name + variation_suffix
 
-    def get_nesting_hierarchy(self):
+    def get_nesting_hierarchy(self) -> List[str]:
         """
         Returns the nesting hierarchy of the config
         :return: list corresponding to the nesting hierarchy
         """
         return self._nesting_hierarchy
 
-    def get_parameter_names(self, deep=True):
+    def get_parameter_names(self, deep: bool = True) -> List[str]:
         complete_list = self._get_user_defined_attributes()
         if deep:
             order = len(self.get_nesting_hierarchy())
@@ -795,67 +790,84 @@ class Configuration:
                 ]
         return complete_list
 
-    def get_variation_name(self):
+    def get_variation_name(self) -> str:
         """
         Returns the variation name of the config
         :return: variation name
         """
         return self._variation_name
 
-    def items(self, deep=False):
+    def items(self, deep: bool = False) -> ItemsView:
+        """
+        Behaves as dict.items(). If deep is False, sub-configs remain sub-configs in the items. Otherwise, they are
+        converted to dict.
+        :param deep: how to return sub-configs that would appear among the items. If False, do not convert them, else
+        recursively convert them to dict
+        :return: the items of the config as in dict.items()
+        """
         return self.get_dict(deep).items()
 
-    def keys(self):
+    def keys(self) -> KeysView:
+        """
+        Behaves as dict.keys(), returning a _dict_keys instance containing the names of the params of the config.
+        :return: the keys if the config as in dict.keys()
+        """
         return self.get_dict(deep=False).keys()
 
-    @update_state("merging;_name")
-    def merge(self, config_path, from_code=False, verbose=False):
+    def match_params(
+        self, *patterns: Optional[Union[str, List[str]]]
+    ) -> Optional[List[str]]:
+        """
+        For a string, a list of strings or several strings, returns all params matching at least one of the input
+        strings.
+        :param patterns: string, a list of strings or several strings
+        :return: all params matching at least one of the input string
+        """
+        patterns = (
+            patterns[0]
+            if len(patterns) == 1 and isinstance(patterns[0], list)
+            else patterns
+        )
+        if patterns is None or (len(patterns) == 1 and patterns[0] is None):
+            return None
+        new_names = [n for n in patterns if "*" not in n and n in self]
+        for name in [n for n in patterns if "*" in n]:
+            new_names = new_names + [
+                p
+                for p in self.get_parameter_names(deep=True)
+                if compare_string_pattern(p, name)
+            ]
+        return new_names
+
+    def merge(
+        self,
+        config_path_or_dictionary: ConfigDeclarator,
+        do_not_pre_process: bool = False,
+        verbose: bool = False,
+    ) -> None:
         """
         Merges provided config path of dictionary into the current config.
-        :param config_path: path or dictionary for the config to merge
-        :param from_code: whether merge was called by setting a variable from the code
+        :param config_path_or_dictionary: path or dictionary for the config to merge
+        :param do_not_pre_process: if true, pre-processing is deactivated in this initialization
         :param verbose: controls the verbose in the config creation and merging process
         :return: none
         """
-        if self._main_config == self:
-            object.__setattr__(self, "_can_set_attributes", True)
-            if verbose:
-                if from_code:
-                    print(f"Merging from code : {config_path}")
-                else:
-                    to_print = str(config_path)
-                    to_print = to_print if len(to_print) < 200 else f"{to_print[:97]} [...] {to_print[-97:]}"
-                    print(f"Merging from new config : {to_print}")
-            self._init_from_config(config_path)
-            self.config_metadata["config_hierarchy"].append(config_path)
-            self._check_for_unlinked_sub_configs()
-            self.turn_on_pre_processing()
-            self._can_set_attributes = False
-            if self.config_metadata["overwriting_regime"] == "auto-save":
-                if self._was_last_saved_as is not None:
-                    self.save()
-        else:
-            dicts_to_merge = []
-            if isinstance(config_path, str):
-                with open(self._find_path(config_path)) as yaml_file:
-                    for dictionary_to_add in yaml.load_all(
-                        yaml_file, Loader=self._get_yaml_loader()
-                    ):
-                        dicts_to_merge.append(dictionary_to_add)
-                    yaml_file.close()
-            else:
-                dicts_to_merge.append(config_path)
-            for dictionary in dicts_to_merge:
-                self._main_config.merge(
-                    {
-                        ".".join(self._nesting_hierarchy) + "." + a: b
-                        for a, b in dictionary.items()
-                    },
-                    from_code=from_code,
-                    verbose=verbose,
-                )
+        self._manual_merge(
+            config_path_or_dictionary=config_path_or_dictionary,
+            do_not_pre_process=do_not_pre_process,
+            verbose=verbose,
+        )
 
-    def merge_from_command_line(self, string_to_merge=None):
+    def merge_from_command_line(
+        self, do_not_pre_process: bool = False, string_to_merge: Optional[str] = None
+    ) -> None:
+        """
+        Deprecated function formerly used to manually merge the command line arguments into the config. This is now done
+        automatically and thus should no longer be done manually.
+        :param do_not_pre_process: if true, pre-processing is deactivated in this initialization
+        :param string_to_merge: if specified, merges this string instead of the sys.argv string
+        :return: none
+        """
         print(
             "WARNING: merge_from_command_line is now deprecated and will automatically start after using any "
             "constructor."
@@ -863,24 +875,53 @@ class Configuration:
         print(
             "You can remove the 'config.merge_from_command_line()' line from your code now :) it's redundant."
         )
-        print(
-            "If you were using it manually to pass a string, you should avoid doing that, but can use "
-            "'config._merge_command_line(string_to_merge)'."
-        )
-        self._merge_command_line(string_to_merge)
+        to_merge = self._get_command_line_dict(string_to_merge)
+        if to_merge:
+            print(f"Merging from command line : {to_merge}")
+            self._manual_merge(to_merge, do_not_pre_process=do_not_pre_process)
 
-    def parameters_pre_processing(self):
+    def parameters_pre_processing(self) -> Dict[str, Callable]:
         """
+
         Returns a dictionary where the keys are parameter names (supporting the '*' character as a replacement for any
         number of characters) and the items are functions. The pre-processing functions need to take a single argument
         and return the new value of the parameter after pre-processing. During pre-processing, all parameters
         corresponding to the parameter name are passed to the corresponding function and their value is replaced by the
         value returned by the corresponding function. This function must be implemented at project-level.
+
+        Using this is advised when an action needs to  happen during the ongoing creation or merging operation, such as
+        the register_as_additional_config_file processing function, or when a parameter is stored on disk using a format
+        that you would prefer to not be used within the config, as the pre-processing function will be performed before
+        the parameter even enters the Configuration object.
+
+        Conversions to non-YAML-readable types are forbidden using pre-processing. Please use post-processing for those
+        functions.
+
         :return: dictionary of the pre-processing functions
         """
         raise NotImplementedError
 
-    def set_variation_name(self, name, deep=False):
+    def parameters_post_processing(self) -> Dict[str, Callable]:
+        """
+
+        Returns a dictionary where the keys are parameter names (supporting the '*' character as a replacement for any
+        number of characters) and the values are functions. The post-processing functions need to take a single argument
+        and return the new value of the parameter after post-processing. After any creation or merging operation,
+        parameters which were modified by said operation get post-processed according to the specified functions. This
+        function can be implemented at project-level.
+
+        Using this is advised for type-changing processing functions or processing functions which have consequences
+        beyond the value of that parameter (for example if they rely on another parameter being initialised, or if they
+        would create directories). A notable exception to this rule of thumb is the register_as_additional_config_file
+        processing function, which should almost always be called as a pre-processing function. Since the value of the
+        parameter should no longer change after post-processing, you can also use post-processing to check if the value
+        of the parameter has the correct type or is in the correct range.
+
+        :return: dictionary of the post-processing functions
+        """
+        return {}
+
+    def set_variation_name(self, name: str, deep: bool = False) -> None:
         """
         Sets the variation index of the config. This function is not intended to be used by the user.
         :param name: index to set the variation index with
@@ -892,7 +933,9 @@ class Configuration:
             for subconfig in self._sub_configs_list:
                 subconfig.set_variation_name(name, deep=True)
 
-    def register_as_additional_config_file(self, path):
+    def register_as_additional_config_file(
+        self, path: Union[str, List[str]]
+    ) -> Union[str, List[str]]:
         """
         Pre-processing function used to register the corresponding parameter as a path to another config file. The new
         config file will then also be used to build the config currently being built.
@@ -903,7 +946,7 @@ class Configuration:
             for individual_path in path:
                 self._init_from_config(individual_path)
             return [
-                self._find_path(path)
+                self._find_path(individual_path)
                 if isinstance(individual_path, str)
                 else individual_path
                 for individual_path in path
@@ -912,16 +955,18 @@ class Configuration:
             self._init_from_config(path)
             return self._find_path(path) if isinstance(path, str) else path
 
-    def register_as_config_variations(self, list_to_register):
+    def register_as_config_variations(
+        self, variation_to_register: Optional[VariationDeclarator]
+    ) -> Optional[VariationDeclarator]:
         """
         Pre-processing function used to register the corresponding parameter as a variation for the current config.
         Please note that config variations need to be declared in the root config.
-        :param list_to_register: list of configs
+        :param variation_to_register: list of configs
         :return: the same list of configs once the configs have been added to the internal variation tracker
         """
         name = None
         for state in self._state[::-1]:
-            if state.startswith("pre_processing"):
+            if state.startswith("processing"):
                 if state.count(";arg0=") > 1:
                     raise ValueError("How did you even manage to raise this ?")
                 name = state.split(";arg0=")[-1]
@@ -931,10 +976,10 @@ class Configuration:
                 "register_as_config_variations was called outside _pre_process_parameter."
             )
 
-        def is_single_var(single):
+        def _is_single_var(single):
             return isinstance(single, str) or (isinstance(single, dict))
 
-        def add_to_variations(variations, names=None):
+        def _add_to_variations(variations, names=None):
             if variations:
                 for index, variation in enumerate(self._configuration_variations):
                     if variation[0] == name:
@@ -956,26 +1001,37 @@ class Configuration:
                 f"Variations declared in sub-configs are invalid ({name}).\n"
                 "Please declare all your variations in the main config."
             )
-        elif isinstance(list_to_register, dict) and (
-            all([is_single_var(potential_single) for potential_single in list_to_register.values()])
-        ):
-            add_to_variations(
-                list(list_to_register.values()), names=list(list_to_register.keys())
+        elif isinstance(variation_to_register, dict) and (
+            all(
+                [
+                    _is_single_var(potential_single)
+                    for potential_single in variation_to_register.values()
+                ]
             )
-        elif isinstance(list_to_register, list) and (
-            all([is_single_var(potential_single) for potential_single in list_to_register])
         ):
-            add_to_variations(list_to_register)
-        elif list_to_register is not None:
+            _add_to_variations(
+                list(variation_to_register.values()),
+                names=list(variation_to_register.keys()),
+            )
+        elif isinstance(variation_to_register, list) and (
+            all(
+                [
+                    _is_single_var(potential_single)
+                    for potential_single in variation_to_register
+                ]
+            )
+        ):
+            _add_to_variations(variation_to_register)
+        elif variation_to_register is not None:
             raise TypeError(
                 f"Variations parsing failed : variations parameters must be a list of configs or a dict"
-                f"containing only configs. Instead, got : {list_to_register}"
+                f"containing only configs. Instead, got : {variation_to_register}"
             )
 
-        return list_to_register
+        return variation_to_register
 
     @staticmethod
-    def register_as_experiment_path(path):
+    def register_as_experiment_path(path: str) -> str:
         """
         Pre-processing function used to register the corresponding parameter as the folder used for the current
         experiment. This will automatically create the relevant folder structure and append an experiment index at the
@@ -995,7 +1051,9 @@ class Configuration:
         os.makedirs(path, exist_ok=True)
         return path
 
-    def register_as_grid(self, list_to_register):
+    def register_as_grid(
+        self, list_to_register: Optional[List[str]]
+    ) -> Optional[List[str]]:
         """
         Pre-processing function used to register the corresponding parameter as a grid for the current config. Grids
         are made of several parameters registered as variations. Instead of adding the variations in those parameters to
@@ -1013,7 +1071,9 @@ class Configuration:
             )
         return list_to_register
 
-    def save(self, filename=None, save_header=True, save_hierarchy=True):
+    def save(
+        self, filename: str = None, save_header: bool = True, save_hierarchy: str = True
+    ) -> None:
         """
         Saves the current config at the provided location. The saving format allows for a perfect recovery of the config
         by using : config = Configuration.load_config(filename). If no filename is given, overwrites the last save.
@@ -1036,7 +1096,16 @@ class Configuration:
         file_extension = file_extension if file_extension else ".yaml"
         config_dump_path = file_path + file_extension
         to_dump = {
-            a: getattr(self, "___" + a if a in self._methods else a)
+            a: (
+                getattr(self, "___" + a if a in self._methods else a)
+                if (
+                    ".".join(self._nesting_hierarchy + [a])
+                    not in self.get_main_config()._pre_postprocessing_values
+                )
+                else self.get_main_config()._pre_postprocessing_values[
+                    ".".join(self._nesting_hierarchy + [a])
+                ]
+            )
             if a != "config_metadata"
             else self._format_metadata()
             for a in (["config_metadata"] if save_header else [])
@@ -1054,33 +1123,44 @@ class Configuration:
         object.__setattr__(self, "_was_last_saved_as", config_dump_path)
         print(f"Configuration saved in : {os.path.abspath(config_dump_path)}")
 
-    def turn_on_pre_processing(self):
-        object.__setattr__(self._main_config, "_pre_process_master_switch", True)
+    def save_value_before_postprocessing(self, name: str, value: Any) -> None:
+        """
+        Function used for bookkeeping : it saves the value a parameter had before its post-processing.
+        :param name: name of the parameter using the dot convention
+        :param value: value of the parameter before post-processing
+        :return: none
+        """
+        self._pre_postprocessing_values[name] = value
 
-    def turn_off_pre_processing(self):
-        object.__setattr__(self._main_config, "_pre_process_master_switch", False)
+    def set_pre_processing(self, value: bool = True) -> None:
+        """
+        Sets the state of the master switch for pre-processing across the entire config object. Calling this for a
+        sub-config will also affect the main config and all other sub-configs.
+        :param value: value to set the pre-processing to
+        :return: none
+        """
+        object.__setattr__(self._main_config, "_pre_process_master_switch", value)
 
-    def values(self, deep=False):
+    def values(self, deep: bool = False) -> ValuesView:
+        """
+        Behaves as dict.values(). If deep is False, sub-configs remain sub-configs in the values. Otherwise, they are
+        converted to dict.
+        :param deep: how to return sub-configs that would appear among the values. If False, do not convert them, else
+        recursively convert them to dict
+        :return: the values of the config as in dict.values()
+        """
         return self.get_dict(deep).values()
 
     # ||||| PRIVATE METHODS |||||
 
-    @staticmethod
-    def _are_same_sub_configs(first, second):
-        if first.get_name() != second.get_name():
-            return False
-        nh1, nh2 = first.get_nesting_hierarchy(), second.get_nesting_hierarchy()
-        if len(nh1) != len(nh2) or any([nh1[i] != nh2[i] for i in range(len(nh1))]):
-            return False
-        return True
-
-    def _check_for_unlinked_sub_configs(self):
+    def _check_for_unlinked_sub_configs(self) -> None:
+        """Used to raise an error when unlinked sub-configs are declared."""
         all_configs = self.get_all_sub_configs()
         linked_configs = self.get_all_linked_sub_configs()
         for i in all_configs:
             found_correspondence = False
             for j in linked_configs:
-                if self._are_same_sub_configs(i, j):
+                if are_same_sub_configs(i, j):
                     found_correspondence = True
                     break
             if not found_correspondence:
@@ -1088,29 +1168,17 @@ class Configuration:
                     f"Sub-config '{i.get_name()}' is unlinked. Unlinked sub-configs are not allowed."
                 )
 
-    @staticmethod
-    def _compare_string_pattern(name, pattern):
-        pattern = pattern.split("*")
-        if len(pattern) == 1:
-            return pattern[0] == name
-        if not (name.startswith(pattern[0]) and name.endswith(pattern[-1])):
-            return False
-        for fragment in pattern:
-            index = name.find(fragment)
-            if index == -1:
-                return False
-            else:
-                name = name[index+len(fragment) :]
-        return True
-
-    def _did_you_mean(self, name, filter_type=None, suffix=""):
+    def _did_you_mean(
+        self, name: str, filter_type: Optional[type] = None, suffix: str = ""
+    ) -> str:
+        """Used to propose suggestions when the user tries to access a parameter which does not exist."""
         params = {}
         name = f"*{name}*"
         for parameter in self.get_parameter_names(deep=True):
             if filter_type is None or isinstance(self[parameter], filter_type):
                 for index in range(len(name)):
-                    if self._compare_string_pattern(
-                        parameter, name[:index] + "*" + name[index+1 :]
+                    if compare_string_pattern(
+                        parameter, name[:index] + "*" + name[index + 1 :]
                     ):
                         if parameter in params:
                             params[parameter] += 1
@@ -1124,7 +1192,9 @@ class Configuration:
             to_return += f"\n- {p}{suffix}"
         return to_return
 
-    def _find_path(self, path):
+    def _find_path(self, path: str) -> str:
+        """Used to find a config from its (potentially relative) path, because it might be ambiguous relative to where
+        it should be looked for. Probably very improvable."""
         # If the path is absolute, use it...
         if os.path.isabs(path):
             if os.path.exists(path):
@@ -1161,14 +1231,17 @@ class Configuration:
                 return path_to_return
         raise FileNotFoundError(f"ERROR : path not found ({path}).")
 
-    def _format_metadata(self):
+    def _format_metadata(self) -> str:
+        """Used to format the metadata for saving or printing."""
         return (
             f"Saving time : {time.ctime(self.config_metadata['saving_time'])} "
             f"({self.config_metadata['saving_time']}) ; "
             f"Regime : {self.config_metadata['overwriting_regime']}"
         )
 
-    def _get_yaml_loader(self):
+    def _get_yaml_loader(self) -> Type[yaml.FullLoader]:
+        """Used to get a custom YAML loader capable of parsing config tags."""
+
         def generic_constructor(yaml_loader, tag, node):
             sub_config_name = tag[1:]
             self._nesting_hierarchy.append(sub_config_name)
@@ -1184,7 +1257,7 @@ class Configuration:
                 )
                 if all(
                     [
-                        not self._are_same_sub_configs(i, dict_to_return)
+                        not are_same_sub_configs(i, dict_to_return)
                         for i in self._sub_configs_list
                     ]
                 ):
@@ -1204,9 +1277,7 @@ class Configuration:
                 }
                 if all(
                     [
-                        not self._are_same_sub_configs(
-                            i, dict_to_return[sub_config_name]
-                        )
+                        not are_same_sub_configs(i, dict_to_return[sub_config_name])
                         for i in self._sub_configs_list
                     ]
                 ):
@@ -1218,7 +1289,9 @@ class Configuration:
         yaml.add_multi_constructor("", generic_constructor, Loader=loader)
         return loader
 
-    def _get_yaml_dumper(self):
+    def _get_yaml_dumper(self) -> Type[yaml.Dumper]:
+        """Used to get a custom YAML dumper capable of writing config tags."""
+
         def config_representer(yaml_dumper, class_instance):
             return yaml_dumper.represent_mapping(
                 "!" + class_instance.get_name(),
@@ -1227,7 +1300,18 @@ class Configuration:
                     if a.startswith("___")
                     else a: self._format_metadata()
                     if a == "config_metadata"
-                    else b
+                    else (
+                        b
+                        if (
+                            ".".join(class_instance._nesting_hierarchy + [a])
+                            not in self.get_main_config()._pre_postprocessing_values
+                        )
+                        else (
+                            self.get_main_config()._pre_postprocessing_values[
+                                ".".join(class_instance._nesting_hierarchy + [a])
+                            ]
+                        )
+                    )
                     for (a, b) in class_instance.__dict__.items()
                     if a not in self._protected_attributes
                     and not (
@@ -1241,7 +1325,8 @@ class Configuration:
         dumper.add_representer(self.__class__, config_representer)
         return dumper
 
-    def _get_user_defined_attributes(self):
+    def _get_user_defined_attributes(self) -> List[str]:
+        """Frequently used to get a list of the names of all the parameters that were in the user's config."""
         return [
             i[3:] if i.startswith("___") else i
             for i in self.__dict__
@@ -1249,7 +1334,11 @@ class Configuration:
         ]
 
     @update_state("_init_from_config;_name")
-    def _init_from_config(self, config_path_or_dict, verbose=False):
+    def _init_from_config(
+        self, config_path_or_dict: ConfigDeclarator, verbose: bool = False
+    ) -> None:
+        """Entrypoint for all methods trying to get any value from outside the config to inside the config. This
+        includes creating new parameters when creating the config or merging existing parameters after the creation."""
         if config_path_or_dict is not None:
             if isinstance(config_path_or_dict, str):
                 with open(self._find_path(config_path_or_dict)) as yaml_file:
@@ -1262,17 +1351,88 @@ class Configuration:
                 for item in config_path_or_dict.items():
                     self._process_item_to_merge_or_add(item, verbose=verbose)
 
+    def _manual_merge(
+        self,
+        config_path_or_dictionary: ConfigDeclarator,
+        do_not_pre_process: bool = False,
+        from_code: bool = False,
+        verbose: bool = False,
+    ) -> None:
+        """This method is called whenever a merge is done by the user, and not by the config creation process. It simply
+        calls _merge with some additional bookkeeping."""
+        self._merge(
+            config_path_or_dictionary=config_path_or_dictionary,
+            do_not_pre_process=do_not_pre_process,
+            from_code=from_code,
+            verbose=verbose,
+        )
+        self._post_process_modified_parameters()
+        if self.get_main_config().config_metadata["overwriting_regime"] == "auto-save":
+            if self.get_main_config()._was_last_saved_as is not None:
+                self.get_main_config().save()
+
+    @update_state("merging;_name")
+    def _merge(
+        self,
+        config_path_or_dictionary: ConfigDeclarator,
+        do_not_pre_process: bool = False,
+        from_code: bool = False,
+        verbose: bool = False,
+    ) -> None:
+        """Method handling all merging operations to call _init_from_config with the proper bookkeeping."""
+        if self._main_config == self:
+            object.__setattr__(self, "_operating_creation_or_merging", True)
+            if verbose:
+                to_print = str(config_path_or_dictionary)
+                to_print = (
+                    to_print
+                    if len(to_print) < 200
+                    else f"{to_print[:97]} [...] {to_print[-97:]}"
+                )
+                if from_code:
+                    print(f"Merging from code : {to_print}")
+                else:
+                    print(f"Merging from new config : {to_print}")
+            self.set_pre_processing(not do_not_pre_process)
+            self._init_from_config(config_path_or_dictionary)
+            self.config_metadata["config_hierarchy"].append(config_path_or_dictionary)
+            self._check_for_unlinked_sub_configs()
+            self.set_pre_processing(True)
+            self._operating_creation_or_merging = False
+        else:
+            dicts_to_merge = []
+            if isinstance(config_path_or_dictionary, str):
+                with open(self._find_path(config_path_or_dictionary)) as yaml_file:
+                    for dictionary_to_add in yaml.load_all(
+                        yaml_file, Loader=self._get_yaml_loader()
+                    ):
+                        dicts_to_merge.append(dictionary_to_add)
+                    yaml_file.close()
+            else:
+                dicts_to_merge.append(config_path_or_dictionary)
+            for dictionary in dicts_to_merge:
+                self._main_config._merge(
+                    {
+                        ".".join(self._nesting_hierarchy + [a]): b
+                        for a, b in dictionary.items()
+                    },
+                    do_not_pre_process=do_not_pre_process,
+                    from_code=from_code,
+                    verbose=verbose,
+                )
+
     @update_state("working_on;_name")
-    def _process_item_to_merge_or_add(self, item, verbose=False):
+    def _process_item_to_merge_or_add(
+        self, item: Tuple[str, Any], verbose: bool = False
+    ) -> None:
+        """Method called by _init_from_config to merge or add a given key, value pair."""
         key, value = item
 
         # Process metadata. If there is metadata, treat the rest of the merge as "loading a saved file"...
         # (which will deactivate the parameter pre-processing for this merge)
         if key == "config_metadata":
             pattern = "Saving time : * (*) ; Regime : *"
-            if not isinstance(value, str) or not self._compare_string_pattern(
-                value, pattern
-            ):
+            if not isinstance(value, str) or not compare_string_pattern(value, pattern):
                 raise RuntimeError(
                     "'config_metadata' is a special parameter. Please do not edit or set it."
                 )
@@ -1291,7 +1451,7 @@ class Configuration:
             self.config_metadata["overwriting_regime"] = regime
 
             self._former_saving_time = float(value.split("(")[-1].split(")")[0])
-            self.turn_off_pre_processing()
+            self.set_pre_processing(False)
             return
 
         # ...do not accept other protected attributes to be merged...
@@ -1311,11 +1471,13 @@ class Configuration:
             else:
                 self._add_item(key, value)
 
-    def _merge_item(self, key, value, verbose=False):
+    def _merge_item(self, key: str, value: Any, verbose: bool = False) -> None:
+        """Method called by _process_item_to_merge_or_add if the value should be merged and not added. This method
+        ultimately performs all merges in the config."""
         if "*" in key:
             to_merge = {}
             for param in self.get_parameter_names(deep=True):
-                if self._compare_string_pattern(param, key):
+                if compare_string_pattern(param, key):
                     to_merge[param] = value
             if not to_merge:
                 print(
@@ -1340,7 +1502,7 @@ class Configuration:
                     f"{self._did_you_mean(key)}"
                 )
 
-            if isinstance(sub_config, self.__class__):
+            if isinstance(sub_config, Configuration):
                 sub_config._init_from_config({new_key: value})
             else:
                 raise TypeError(
@@ -1356,8 +1518,8 @@ class Configuration:
                     f"it is not in the default '{self.get_name().upper()}' config.\n"
                     f"{self._did_you_mean(key)}"
                 )
-            if isinstance(old_value, self.__class__):
-                if isinstance(value, self.__class__):
+            if isinstance(old_value, Configuration):
+                if isinstance(value, Configuration):
                     old_value._init_from_config(value.get_dict(deep=False))
                 elif isinstance(value, dict):
                     old_value._init_from_config(value)
@@ -1372,10 +1534,14 @@ class Configuration:
                 object.__setattr__(
                     self,
                     "___" + key if key in self._methods else key,
-                    self._pre_process_parameter(key, value),
+                    self._process_parameter(key, value, "pre"),
                 )
+                if key not in self._modified_buffer:
+                    self._modified_buffer.append(key)
 
-    def _add_item(self, key, value):
+    def _add_item(self, key: str, value: Any) -> None:
+        """Method called by _process_item_to_merge_or_add if the value should be added and not merged. This method
+        ultimately performs all additions to the config."""
         if self._state[0].split(";")[0] == "setup" and "*" in key:
             raise ValueError(
                 f"The '*' character is not authorized in the default config ({key})."
@@ -1408,12 +1574,17 @@ class Configuration:
                 self[name]._init_from_config(dict_to_add)
                 self[name].config_metadata["config_hierarchy"] += [dict_to_add]
             else:
-                if isinstance(sub_config, self.__class__):
+                if isinstance(sub_config, Configuration):
                     sub_config._init_from_config({key.split(".", 1)[1]: value})
                 else:
+                    did_you_mean = self._did_you_mean(
+                        key.split(".")[0],
+                        filter_type=self.__class__,
+                        suffix=key.split(".", 1)[1],
+                    )
                     raise TypeError(
                         f"Failed to set parameter '{key}' : '{key.split('.')[0]}' is not a sub-config.\n"
-                        f"{self._did_you_mean(key.split('.')[0], filter_type=self.__class__, suffix=key.split('.', 1)[1])}"
+                        f"{did_you_mean}"
                     )
         else:
             try:
@@ -1425,7 +1596,7 @@ class Configuration:
                     print(
                         f"WARNING : '{key}' is the name of a method in the Configuration object."
                     )
-                if isinstance(value, self.__class__):
+                if isinstance(value, Configuration):
                     # This has to be performed in two steps, otherwise the param
                     # inside the new sub-config does not get pre-processed.
                     object.__setattr__(
@@ -1438,7 +1609,8 @@ class Configuration:
                             ],
                             config_path_or_dictionary={},
                             state=self._state,
-                            nesting_hierarchy=self._nesting_hierarchy + [value._name],
+                            nesting_hierarchy=self._nesting_hierarchy
+                            + ["___" + key if key in self._methods else key],
                             main_config=self._main_config,
                         ),
                     )
@@ -1453,7 +1625,9 @@ class Configuration:
                         self._state[0].split(";")[0] == "setup"
                         and [i.split(";")[0] for i in self._state].count("setup") < 2
                     ):
-                        preprocessed_parameter = self._pre_process_parameter(key, value)
+                        preprocessed_parameter = self._process_parameter(
+                            key, value, "pre"
+                        )
                     else:
                         preprocessed_parameter = value
                     object.__setattr__(
@@ -1461,8 +1635,14 @@ class Configuration:
                         "___" + key if key in self._methods else key,
                         preprocessed_parameter,
                     )
+                    if key not in self._modified_buffer:
+                        self._modified_buffer.append(key)
 
-    def _merge_command_line(self, string_to_merge=None):
+    def _get_command_line_dict(
+        self, string_to_merge: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """Method called automatically at the end of each constructor to gather all parameters from the command line
+        into a dictionary. This dictionary is then merged."""
         # If a string is passed as input, process it as sys.argv would
         if string_to_merge is not None:
             list_to_merge = [""]
@@ -1488,6 +1668,9 @@ class Configuration:
         else:
             list_to_merge = sys.argv
 
+        # Setting the config to operational mode in case this is called manually
+        object.__setattr__(self, "_operating_creation_or_merging", True)
+
         # Gather parameters, their values and their types
         to_merge = {}  # {param: [former_value, new_value, type_forcing], ...}
         found_config_path = not self._from_argv
@@ -1503,7 +1686,7 @@ class Configuration:
                     pattern, value = element[2:], None
                 in_param = []
                 for parameter in self.get_parameter_names(deep=True):
-                    if self._compare_string_pattern(parameter, pattern):
+                    if compare_string_pattern(parameter, pattern):
                         in_param.append(parameter)
                         to_merge[parameter] = [self[parameter], value, None]
                 if not in_param:
@@ -1531,253 +1714,74 @@ class Configuration:
                 for parameter in in_param:
                     to_merge[parameter][1] += f" {element}"
 
-        # Infer types, then merge
-        def _adapt_to_type(previous_value, value_to_adapt, force, param):
-            def _parse_scalar(raw_string, force_):
-                if force_ is None:
-                    for forced_type in ["int", "float", "str", "bool", "list", "dict"]:
-                        if (
-                            raw_string.endswith(f"!{forced_type}")
-                            and raw_string[raw_string.rindex("!") - 1] != "\\"
-                        ):
-                            force_ = forced_type
-                            raw_string = raw_string[: -1 - len(forced_type)]
-                raw_string.lstrip(" ")
-                while raw_string[-1] == " " and raw_string[-2] != "\\":
-                    raw_string = raw_string[:-1]
-                to_return = ""
-                esc = False
-                for character in raw_string:
-                    if esc or character != "\\":
-                        esc = False
-                        to_return += character
-                    else:
-                        esc = True
-                return raw_string, force_
+        # Infer types, then return
+        return {k: adapt_to_type(v[0], v[1], v[2], k) for k, v in to_merge.items()}
 
-            def _parse_container(container_string):
-                new_list = [""]
-                in_brackets = []
-                esc = False
-                for character in container_string:
-                    if esc:
-                        esc = False
-                        if character == " ":
-                            new_list[-1] += "\\" + character
-                        else:
-                            new_list[-1] += character
-                    else:
-                        if character == "\\":
-                            esc = True
-                        elif character == "," and not in_brackets:
-                            new_list.append("")
-                        elif character != " " or new_list[-1]:
-                            new_list[-1] += character
-                            if character in ["[", "{"]:
-                                in_brackets.append(character)
-                            if character == "]" and in_brackets[-1] == "[":
-                                in_brackets.pop(-1)
-                            if character == "}" and in_brackets[-1] == "{":
-                                in_brackets.pop(-1)
-                for i in range(len(new_list)):
-                    while new_list[i][-1] == " " and new_list[i][-2] != "\\":
-                        new_list[i] = new_list[i][:-1]
-                    new_list[i] = new_list[i].replace("\\ ", " ")
-                    forced = False
-                    for forced_type in ["int", "float", "str", "bool", "list", "dict"]:
-                        if (
-                            not forced
-                            and new_list[i].endswith(f"!{forced_type}")
-                            and new_list[i][-2 - len(forced_type)] != "\\"
-                        ):
-                            forced = True
-                            new_list[i] = [
-                                new_list[i][: new_list[i].rindex("!")],
-                                forced_type,
-                            ]
-                            while new_list[i][0][-1] == " " and new_list[0][-2] != "\\":
-                                new_list[i][0] = new_list[i][0][:-1]
-                    if not forced:
-                        new_list[i] = [new_list[i], None]
-                return new_list
-
-            if value_to_adapt is None:
-                return True
-
-            if value_to_adapt.lower() in ["none", "null"] and force is None:
-                return None
-
-            scalar_parsed, force = _parse_scalar(value_to_adapt, force)
-
-            if previous_value is None and force is None:
-                if scalar_parsed.lower() not in ["none", "null"]:
-                    raise TypeError(
-                        f"Type of param '{param}' cannot be inferred because its previous value was None.\n"
-                        f"To overwrite None values from command line, please force their type :\n\n"
-                        f"Example : \t\t python main.py --none_param=0.001 !float"
+    def _post_process_modified_parameters(self) -> None:
+        """This method is called at the end of a config creation or merging operation. It applies post-processing to
+        all parameters modified by this operation. If a parameter is converted into a non-native YAML type, also keeps
+        its former value in memory for saving purposes."""
+        print("Performing post-processing for modified parameters...")
+        modified = [
+            ".".join(self.get_nesting_hierarchy() + [self._modified_buffer.pop(0)])
+            for _ in range(len(self._modified_buffer))
+        ]
+        for subconfig in self.get_all_linked_sub_configs():
+            for _ in range(len(subconfig._modified_buffer)):
+                modified.append(
+                    ".".join(
+                        subconfig.get_nesting_hierarchy()
+                        + [subconfig._modified_buffer.pop(0)]
                     )
-                return None
-
-            if (isinstance(previous_value, str) and force is None) or force == "str":
-                return scalar_parsed
-
-            if (isinstance(previous_value, list) and force is None) or force == "list":
-                if value_to_adapt[0] == "[" and value_to_adapt[-1] == "]":
-                    value_to_adapt = value_to_adapt[1:-1]
-                value_to_adapt = (
-                    _parse_container(value_to_adapt) if value_to_adapt else []
                 )
-                if isinstance(previous_value, list):
-                    if all(
-                        isinstance(i, type(previous_value[-1]))
-                        for i in previous_value[:-1]
-                    ):
-                        return [
-                            _adapt_to_type(previous_value[0], v[0], v[1], param)
-                            for v in value_to_adapt
-                        ]
-                    elif len(previous_value) == len(value_to_adapt):
-                        return [
-                            _adapt_to_type(
-                                previous_value[index],
-                                value_to_adapt[index][0],
-                                value_to_adapt[index][1],
-                                param,
-                            )
-                            for index in range(len(value_to_adapt))
-                        ]
-                    elif all(
-                        [
-                            v[1] is not None or v[0].lower() in ["none", "null"]
-                            for v in value_to_adapt
-                        ]
-                    ):
-                        return [
-                            _adapt_to_type(None, v[0], v[1], param)
-                            for v in value_to_adapt
-                        ]
-                    else:
-                        raise TypeError(
-                            f"New value for list in '{param}' is inconsistent with old value '{previous_value}'. If the"
-                            f" new value is correct, please force the type of the elements in the list so type"
-                            f" inference can be done."
-                        )
-                else:
-                    if all(
-                        [
-                            v[1] is not None or v[0].lower() in ["none", "null"]
-                            for v in value_to_adapt
-                        ]
-                    ):
-                        return [
-                            _adapt_to_type(None, v[0], v[1], param)
-                            for v in value_to_adapt
-                        ]
-                    else:
-                        raise TypeError(
-                            f"Since the previous value for '{param}' was not a list, none of its items' "
-                            f"values can be inferred. Please force the type of all elements in the new "
-                            f"value's list."
-                        )
+        for name in modified:
+            split = name.split(".")[len(self._nesting_hierarchy) :]
+            name = ".".join(split)
+            recursive_set_attribute(
+                self,
+                ".".join(split[:-1] + ["___" + split[-1]])
+                if split[-1] in self._methods
+                else name,
+                self._process_parameter(name, self[name], "post"),
+            )
 
-            if (isinstance(previous_value, dict) and force is None) or force == "dict":
-                if value_to_adapt[0] == "{" and value_to_adapt[-1] == "}":
-                    value_to_adapt = value_to_adapt[1:-1]
-                value_to_adapt = (
-                    _parse_container(value_to_adapt) if value_to_adapt else []
-                )
-                if any(value_to_adapt):
-                    value_to_adapt = {
-                        v[0].split(":", 1)[0]: (v[0].split(":", 1)[1], v[1])
-                        for v in value_to_adapt
-                    }
-                else:
-                    value_to_adapt = {}
-                if isinstance(previous_value, dict):
-                    if all(
-                        [
-                            key in previous_value
-                            or value_to_adapt[key][1] is not None
-                            or value_to_adapt[key][0].lstrip(" ").lower()
-                            in ["none", "null"]
-                            for key in value_to_adapt
-                        ]
-                    ):
-                        return {
-                            k.rstrip(" "): _adapt_to_type(
-                                previous_value.get(k, None),
-                                v[0].lstrip(" "),
-                                v[1],
-                                param,
-                            )
-                            for k, v in value_to_adapt.items()
-                        }
-                    else:
-                        raise TypeError(
-                            f"New value for dict in '{param}' is inconsistent with old value '{previous_value}'. If the "
-                            f"new value is correct, please force the type of the new elements in the dict so "
-                            f"type inference can be done."
-                        )
-                else:
-                    if all(
-                        [
-                            value_to_adapt[key][1] is not None
-                            or value_to_adapt[key][0].lstrip(" ").lower()
-                            in ["none", "null"]
-                            for key in value_to_adapt
-                        ]
-                    ):
-                        return {
-                            k.rstrip(" "): _adapt_to_type(
-                                None, v[0].lstrip(" "), v[1], param
-                            )
-                            for k, v in value_to_adapt.items()
-                        }
-                    else:
-                        raise TypeError(
-                            f"Since the previous value for '{param}' was not a dict, none of its keys' "
-                            f"values can be inferred. Please force the type of all elements in the new "
-                            f"value's dict."
-                        )
-
-            if (
-                    isinstance(previous_value, int)
-                    and not isinstance(previous_value, bool)
-                    and force is None
-            ) or force == "int":
-                return int(scalar_parsed)
-
-            if (
-                isinstance(previous_value, float) and force is None
-            ) or force == "float":
-                return float(scalar_parsed)
-
-            if (isinstance(previous_value, bool) and force is None) or force == "bool":
-                if scalar_parsed.strip(" ").lower() in ["y", "yes", "true", "1"]:
-                    return True
-                elif scalar_parsed.strip(" ").lower() in ["n", "no", "false", "0"]:
-                    return False
-                else:
-                    raise ValueError("Boolean parameters can only be replaced with (non case sensitive) : \n"
-                                     "- to get a True value : y, yes, true, 1\n"
-                                     "- to get a False value : n, no, false, 0")
-
-        to_merge = {k: _adapt_to_type(v[0], v[1], v[2], k) for k, v in to_merge.items()}
-
-        if to_merge:
-            print(f"Merging from command line : {to_merge}")
-            self.merge(to_merge)
-
-    @update_state("pre_processing;_name")
-    def _pre_process_parameter(self, name, parameter):
+    @update_state("processing;_name")
+    def _process_parameter(
+        self, name: str, parameter: Any, processing_type: str
+    ) -> Any:
+        """This method checks if a processing function has been defined for given name, then returns the processed
+        value when that is the case."""
         if self._main_config._pre_process_master_switch:
             total_name = ".".join(self._nesting_hierarchy + [name])
-            transformation_dict = self.parameters_pre_processing()
+            old_value = None
+            if processing_type == "pre":
+                transformation_dict = self.parameters_pre_processing()
+            elif processing_type == "post":
+                old_value = copy.deepcopy(parameter)
+                transformation_dict = self.parameters_post_processing()
+            else:
+                raise ValueError(
+                    f"Unknown processing_type : '{processing_type}'. Valid types are 'pre', 'post', 'get'."
+                )
+            was_processed = False
             for key, item in transformation_dict.items():
-                if self._compare_string_pattern(total_name, key):
+                if compare_string_pattern(total_name, key):
+                    was_processed = True
                     try:
                         parameter = item(parameter)
                     except Exception:
-                        print(f"ERROR while pre-processing param '{key}' :")
+                        print(
+                            f"ERROR while {processing_type}-processing param '{total_name}' :"
+                        )
                         raise
+            if processing_type == "pre" and not is_type_valid(parameter, Configuration):
+                raise RuntimeError(
+                    f"ERROR while pre-processing param '{total_name}' : pre-processing functions that change the type "
+                    f"of a param to a non-native YAML type are forbidden because they cannot be saved. Please use a "
+                    f"parameter post-processing instead."
+                )
+            elif processing_type == "post" and was_processed:
+                self.get_main_config().save_value_before_postprocessing(
+                    ".".join(self._nesting_hierarchy + [name]), old_value
+                )
         return parameter

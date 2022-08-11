@@ -22,7 +22,7 @@ import time
 import io
 import sys
 from pathlib import Path
-from rr.ml.config import Configuration
+from .config import Configuration
 import importlib
 
 
