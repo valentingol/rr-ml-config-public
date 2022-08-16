@@ -20,19 +20,7 @@ import pathlib
 from setuptools import setup
 
 
-try:
-    # used for automatic deployment pipeline
-    import deploytools
-    version = deploytools.get_version()
-except ModuleNotFoundError:
-    # used otherwise
-    import requests
-    from packaging import version
-    print("WARNING : the version which will be displayed for this package will be the latest deployed version. "
-          "This is irrespective of which commit was used to build the library from.")
-    version = str(max([version.parse(i["version"])
-                       for i in requests.get("https://gitlab.com/api/v4/projects/26449469/packages/").json()
-                       if i["name"] == "rr-ml-config"]))
+version='1.11.1'
 
 # The directory containing this file
 HERE = pathlib.Path(__file__).parent
